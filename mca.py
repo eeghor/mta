@@ -18,7 +18,7 @@ class MCA:
 		print(f'channels: {len(self.channels)}')
 		print(f'conversions: {self.total_conversions}')
 
-	def heuristic_models(self):
+	def heuristic_models(self, normalized=True):
 
 		"""
 		calculate channel contributions assuming the last and first touch attribution
@@ -36,7 +36,15 @@ class MCA:
 		self.first_touch = sorted(self.first_touch, key=lambda x: x[1], reverse=True)
 		self.last_touch = sorted(self.last_touch, key=lambda x: x[1], reverse=True)
 
+		# divide by total conversions if needed
+		if normalized:
+			self.first_touch
+
 		return self
+
+	def markov_model(self):
+
+		
 
 
 if __name__ == '__main__':
