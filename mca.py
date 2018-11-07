@@ -1,5 +1,5 @@
 import pandas as pd
-from itertools import chain
+from itertools import chain, tee
 from collections import defaultdict, Counter
 
 class MCA:
@@ -13,7 +13,7 @@ class MCA:
 
 		self.total_conversions = self.data['total_conversions'].sum()
 
-		self.channels = {ch for ch in chain.from_iterable(self.data['path'].str.split('>').apply(lambda _: [w.strip() for w in _]))}
+		self.channels = list({ch for ch in chain.from_iterable(self.data['path'].str.split('>').apply(lambda _: [w.strip() for w in _]))})
 
 		print(f'channels: {len(self.channels)}')
 		print(f'conversions: {self.total_conversions}')
@@ -42,9 +42,34 @@ class MCA:
 
 		return self
 
-	def markov_model(self):
+	def count_pairs(self):
 
-		
+		trans = defaultdict(int)
+
+		for ch_list, convs in zip(self.data['path'].str.split('>').apply(lambda _: [w.strip() for w in _]), 
+										self.data['total_conversions']):
+			it1, it2 = tee(ch_list + ['null'] if convs < 1 else ch_list + ['conv'])
+			next(it2, None)
+
+			for t in zip(it1,it2):
+				trans[t] += (convs if convs else 1)
+
+		return trans
+
+	def trans_matrix(self):
+
+		outs = defaultdict(int)
+		probs = defaultdict(float)
+
+		pair_counts = self.count_pairs()
+
+		for pair in pair_counts:
+			outs[pair[0]] += pair_counts[pair]
+
+		for pair in pair_counts:
+			probs[pair] = pair_counts[pair]/outs[pair[0]]
+
+		return probs
 
 
 if __name__ == '__main__':
@@ -56,4 +81,6 @@ if __name__ == '__main__':
 
 	print('last touch:')
 	print(mca.last_touch)
+
+	print(mca.trans_matrix())
 
