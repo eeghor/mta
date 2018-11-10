@@ -6,6 +6,7 @@ from collections import defaultdict, Counter
 import random
 import time
 import numpy as np
+import copy
 
 class MCA:
 
@@ -21,11 +22,13 @@ class MCA:
 		# split into a list and attach start labels
 		self.data['path'] = self.data['path'].str.split('>').apply(lambda _: ['<start>'] + [w.strip() for w in _]) 
 
-		self.channels = list({ch for ch in chain.from_iterable(self.data['path'])} - {'<start>'})
+		self.channels = ['<start>'] + sorted(list({ch for ch in chain.from_iterable(self.data['path'])} - {'<start>'})) + ['<conversion>', '<null>']
+		self.ch_index = {c: i for i, c in enumerate(self.channels)}
 
-		print(self.data.head())
-		print(f'channels: {len(self.channels)}')
+		print(f'channels ({len(self.channels)}): {self.ch_index}')
 		print(f'conversions: {self.total_conversions}')
+
+		self.m = np.zeros(shape=(len(self.channels), len(self.channels)))
 
 		self.trans_probs = defaultdict(float)
 
@@ -89,15 +92,11 @@ class MCA:
 			ways_from[pair[0]] += pair_counts[pair]
 
 		for pair in pair_counts:
-			self.trans_probs[pair] = pair_counts[pair]/ways_from[pair[0]]
-
-		m = np.zeros(shape=(len(self.channels), len(self.channels)))
+			outs = ways_from.get(pair[0], 0)
+			self.trans_probs[pair] = pair_counts[pair]/outs if outs else 0
 
 		for p in self.trans_probs:
-			
-
-
-
+			self.m[self.ch_index[p[0]]][self.ch_index[p[1]]] = self.trans_probs[p]
 
 		return self
 
@@ -115,6 +114,47 @@ class MCA:
 								for pair in self.pairs(ch_list + ['<conversion>']) if pair[0] != pair[1]]))
 
 		return sum(conv_probs_by_path)
+
+	def simulate_path(self, n, drop_state=None):
+
+		conv_or_null = defaultdict(int)
+		channel_idxs = list(self.ch_index.values())
+
+		null_idx = self.ch_index['<null>']
+
+		m = copy.copy(self.m)
+
+		if drop_state:
+
+			drop_idx = self.ch_index[drop_state]
+			# no exit from this state, i.e. it becomes <null>
+			m[drop_idx] = 0
+
+		else:
+
+			drop_idx = null_idx
+
+		for _ in range(n):
+
+			init_idx = self.ch_index['<start>']
+			final_state = None
+
+			while not final_state:
+
+				next_idx = np.random.choice(channel_idxs, p=m[init_idx])
+
+				if next_idx == self.ch_index['<conversion>']:
+					conv_or_null['<conversion>'] += 1
+					final_state = True
+				elif next_idx in {null_idx, drop_idx}:
+					conv_or_null['<null>'] += 1
+					final_state = True
+				else:
+					init_idx = next_idx
+
+		return conv_or_null
+
+
 
 	def removal_effects(self):
 
@@ -161,16 +201,22 @@ if __name__ == '__main__':
 
 	print('channels:', mca.channels)
 
-	# print('first touch:')
-	# print(mca.first_touch)
+	print('first touch:')
+	print(mca.first_touch)
 
-	# print('last touch:')
-	# print(mca.last_touch)
+	print('last touch:')
+	print(mca.last_touch)
 
 	mca.trans_matrix()
 
+	conversions_by_channel = defaultdict()
+	
 	t0 = time.time()
-	mca.removal_effects()
+	print(mca.simulate_path(n=1000000, drop_state='eta'))
+	print('elapsed time: {:0.1f} sec'.format(time.time() - t0))
 
-	print(time.time() - t0)
+	# t0 = time.time()
+	# mca.removal_effects()
+
+	# print(time.time() - t0)
 
