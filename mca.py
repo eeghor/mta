@@ -22,7 +22,9 @@ class MCA:
 		# split into a list and attach start labels
 		self.data['path'] = self.data['path'].str.split('>').apply(lambda _: ['<start>'] + [w.strip() for w in _]) 
 
-		self.channels = ['<start>'] + sorted(list({ch for ch in chain.from_iterable(self.data['path'])} - {'<start>'})) + ['<conversion>', '<null>']
+		self.base_channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])} - {'<start>'}))
+
+		self.channels = ['<start>'] + self.base_channels + ['<conversion>', '<null>']
 		self.ch_index = {c: i for i, c in enumerate(self.channels)}
 
 		print(f'channels ({len(self.channels)}): {self.ch_index}')
@@ -212,11 +214,31 @@ if __name__ == '__main__':
 	conversions_by_channel = defaultdict()
 	
 	t0 = time.time()
-	print(mca.simulate_path(n=1000000, drop_state='eta'))
+	sims_full = mca.simulate_path(n=1000000, drop_state=None)
 	print('elapsed time: {:0.1f} sec'.format(time.time() - t0))
 
-	# t0 = time.time()
-	# mca.removal_effects()
+	for i, ch in enumerate(mca.base_channels, 1):
+		print(f'channel {ch} ({i}/{len(mca.base_channels)})')
+		t0 = time.time()
+		conversions_by_channel[ch] = mca.simulate_path(n=1000000, drop_state=ch)
+		print('elapsed time: {:0.1f} sec'.format(time.time() - t0))
 
-	# print(time.time() - t0)
+	props_by_channel = defaultdict(float)
+	reff_by_channel = defaultdict(float)
+
+	for ch in conversions_by_channel:
+		props_by_channel[ch] = conversions_by_channel[ch]['<conversion>']/sims_full['<conversion>']
+
+	s = sum(list(props_by_channel.values()))
+
+	for ch in props_by_channel:
+		reff_by_channel[ch] = props_by_channel[ch]/s
+
+	print(reff_by_channel)
+
+
+
+
+
+
 
