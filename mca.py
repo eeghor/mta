@@ -17,24 +17,27 @@ class MCA:
 		assert set(self.data.columns) <= set('path total_conversions total_conversion_value total_null'.split()), \
 						print(f'wrong column names in {data}!')
 
-		self.total_conversions = self.data['total_conversions'].sum()
+		# split journey into a list of visited channels
+		self.data['path'] = self.data['path'].str.split('>').apply(lambda _: [ch.strip() for ch in _]) 
+		# make a sorted list of channel names
+		self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
+		# add some extra channels
+		self.channels_ext = ['<start>'] + self.channels + ['<conversion>', '<null>']
+		# make dictionary mapping a channel name to it's index
+		self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
 
-		# split into a list and attach start labels
-		self.data['path'] = self.data['path'].str.split('>').apply(lambda _: ['<start>'] + [w.strip() for w in _]) 
+		print(f'rows: {len(self.data):,}')
+		print(f'channels: {len(self.channels)}')
+		print(f'conversions: {self.data["total_conversions"].sum():,}')
+		print(f'exits: {self.data["total_null"].sum():,}')
 
-		self.base_channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])} - {'<start>'}))
-
-		self.channels = ['<start>'] + self.base_channels + ['<conversion>', '<null>']
-		self.ch_index = {c: i for i, c in enumerate(self.channels)}
-
-		print(f'channels ({len(self.channels)}): {self.ch_index}')
-		print(f'conversions: {self.total_conversions}')
-
-		self.m = np.zeros(shape=(len(self.channels), len(self.channels)))
+		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
 
 		self.trans_probs = defaultdict(float)
 
-	def heuristic_models(self, normalized=True):
+		random.seed(1)
+
+	def heuristic_models(self):
 
 		"""
 		calculate channel contributions assuming the last and first touch attribution
@@ -43,9 +46,9 @@ class MCA:
 		self.first_touch = []
 		self.last_touch = []
 
-		for c in self.channels:
+		for c in self.channels_ext:
 
-			self.first_touch.append((c, self.data.loc[self.data['path'].apply(lambda _: _[1] == c), 'total_conversions'].sum()))
+			self.first_touch.append((c, self.data.loc[self.data['path'].apply(lambda _: _[0] == c), 'total_conversions'].sum()))
 			self.last_touch.append((c, self.data.loc[self.data['path'].apply(lambda _: _[-1] == c), 'total_conversions'].sum()))
 
 		# rank from high to low
@@ -71,7 +74,7 @@ class MCA:
 											self.data['total_conversions'], 
 												self.data['total_null']):
 
-			for t in self.pairs(ch_list):
+			for t in self.pairs(['<start>'] + ch_list):
 
 				if t[0] != t[1]:
 					trans[t] += (convs + nulls)
@@ -86,49 +89,48 @@ class MCA:
 
 	def trans_matrix(self):
 
+		print('estimating transition matrix...', end='')
+
 		ways_from = defaultdict(int)
 
 		pair_counts = self.count_pairs()
 
 		for pair in pair_counts:
+
 			ways_from[pair[0]] += pair_counts[pair]
 
 		for pair in pair_counts:
+
 			outs = ways_from.get(pair[0], 0)
 			self.trans_probs[pair] = pair_counts[pair]/outs if outs else 0
 
 		for p in self.trans_probs:
-			self.m[self.ch_index[p[0]]][self.ch_index[p[1]]] = self.trans_probs[p]
+
+			idx_channel_from = self.channels_to_idxs[p[0]]
+			idx_channel_to = self.channels_to_idxs[p[1]]
+
+			self.m[idx_channel_from][idx_channel_to] = self.trans_probs[p]
+
+		# check if sums of rows are equal to one
+		for ch in self.channels:
+			assert np.abs(np.sum(self.m[self.channels_to_idxs[ch]]) - 1) < 1e-6, print(f'row value for channel {ch} don\'t sum up to one!')
+
+		print('ok')
 
 		return self
 
-	def prob_conv_by_starting_channel(self, start_channel=None, drop_channel=None):
-
-		conv_probs_by_path = []
-
-		for ch_list, convs, nulls in zip(self.data['path'], 
-											self.data['total_conversions'], 
-													self.data['total_null']):
-
-			if convs and (ch_list[1] == start_channel) and (drop_channel not in ch_list):
-
-				conv_probs_by_path.append(reduce(mul, [self.trans_probs[pair] 
-								for pair in self.pairs(ch_list + ['<conversion>']) if pair[0] != pair[1]]))
-
-		return sum(conv_probs_by_path)
-
-	def simulate_path(self, n, drop_state=None):
+	def simulate_path(self, n=1e6, drop_state=None):
 
 		conv_or_null = defaultdict(int)
-		channel_idxs = list(self.ch_index.values())
+		channel_idxs = list(self.channels_to_idxs.values())
 
-		null_idx = self.ch_index['<null>']
+		null_idx = self.channels_to_idxs['<null>']
 
 		m = copy.copy(self.m)
 
 		if drop_state:
 
-			drop_idx = self.ch_index[drop_state]
+			drop_idx = self.channels_to_idxs[drop_state]
 			# no exit from this state, i.e. it becomes <null>
 			m[drop_idx] = 0
 
@@ -138,14 +140,14 @@ class MCA:
 
 		for _ in range(n):
 
-			init_idx = self.ch_index['<start>']
+			init_idx = self.channels_to_idxs['<start>']
 			final_state = None
 
 			while not final_state:
 
-				next_idx = np.random.choice(channel_idxs, p=m[init_idx])
+				next_idx = np.random.choice(channel_idxs, p=m[init_idx], replace=False)
 
-				if next_idx == self.ch_index['<conversion>']:
+				if next_idx == self.channels_to_idxs['<conversion>']:
 					conv_or_null['<conversion>'] += 1
 					final_state = True
 				elif next_idx in {null_idx, drop_idx}:
@@ -156,89 +158,32 @@ class MCA:
 
 		return conv_or_null
 
-
-
 	def removal_effects(self):
 
-		overall_prob = []
-		prob_ch = defaultdict(list)
-		prob_ch_av = defaultdict(float)
+		print('calculating removal effects...')
 
-		for _ in range(10000):
+		conversions_by_channel = defaultdict()
+		removal_effects = defaultdict(float)
 
-			if (_%1000) and (_>0) == 0:
-				print(_)
+		print('no removals...', end='')
+		conversions_by_channel['no_removals'] = self.simulate_path()
+		print('ok')
 
-			rch = random.randint(0, len(self.channels) - 1)
-			overall_prob.append(self.prob_conv_by_starting_channel(start_channel=self.channels[rch]))
-
-			for ch in self.channels:
-				prob_ch[ch].append(self.prob_conv_by_starting_channel(start_channel=self.channels[rch], drop_channel=ch))
-
-		op = reduce(lambda x,y: x+y, overall_prob)/len(overall_prob)
+		for i, ch in enumerate(self.channels, 1):
+			print(f'{i}/{len(self.channels)}: removed channel {ch}...', end='')
+			conversions_by_channel[ch] = self.simulate_path(drop_state=ch)
+			print('ok')
+			removal_effects[ch] = (conversions_by_channel['no_removals']['<conversion>'] - conversions_by_channel[ch]['<conversion>'])/conversions_by_channel['no_removals']['<conversion>']
 
 		for ch in self.channels:
-			prob_ch_av[ch] = reduce(lambda x,y: x+y, prob_ch[ch])/len(prob_ch[ch])
+			print(f'{ch}: {removal_effects[ch]}')
 
-		print('op=', op)
-
-		for ch in prob_ch_av:
-			prob_ch_av[ch] = (op - prob_ch_av[ch])/op
-
-		print(prob_ch_av)
-
-		reffs = defaultdict(float)
-
-		for ch in prob_ch_av:
-			reffs[ch] = prob_ch_av[ch]/sum(list(prob_ch_av.values()))
-
-		print(reffs)
-
-		
+		return self
 
 
 if __name__ == '__main__':
 
-	mca = MCA().heuristic_models()
-
-	print('channels:', mca.channels)
-
-	print('first touch:')
-	print(mca.first_touch)
-
-	print('last touch:')
-	print(mca.last_touch)
-
-	mca.trans_matrix()
-
-	conversions_by_channel = defaultdict()
-	
-	t0 = time.time()
-	sims_full = mca.simulate_path(n=1000000, drop_state=None)
-	print('elapsed time: {:0.1f} sec'.format(time.time() - t0))
-
-	for i, ch in enumerate(mca.base_channels, 1):
-		print(f'channel {ch} ({i}/{len(mca.base_channels)})')
-		t0 = time.time()
-		conversions_by_channel[ch] = mca.simulate_path(n=1000000, drop_state=ch)
-		print('elapsed time: {:0.1f} sec'.format(time.time() - t0))
-
-	props_by_channel = defaultdict(float)
-	reff_by_channel = defaultdict(float)
-
-	for ch in conversions_by_channel:
-		props_by_channel[ch] = conversions_by_channel[ch]['<conversion>']/sims_full['<conversion>']
-
-	s = sum(list(props_by_channel.values()))
-
-	for ch in props_by_channel:
-		reff_by_channel[ch] = props_by_channel[ch]/s
-
-	print(reff_by_channel)
-
-
-
-
-
-
-
+	mca = MCA() \
+			.heuristic_models() \
+			.trans_matrix() \
+			.removal_effects()
