@@ -119,7 +119,7 @@ class MCA:
 
 		return self
 
-	def simulate_path(self, n=1e6, drop_state=None):
+	def simulate_path(self, n=int(1e6), drop_state=None):
 
 		conv_or_null = defaultdict(int)
 		channel_idxs = list(self.channels_to_idxs.values())
@@ -176,7 +176,7 @@ class MCA:
 			removal_effects[ch] = (conversions_by_channel['no_removals']['<conversion>'] - conversions_by_channel[ch]['<conversion>'])/conversions_by_channel['no_removals']['<conversion>']
 
 		for ch in self.channels:
-			print(f'{ch}: {removal_effects[ch]}')
+			print(f'{ch}: {removal_effects[ch]:.5f}')
 
 		return self
 
