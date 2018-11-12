@@ -232,13 +232,9 @@ class MCA:
 
 			n_channel[_]['conv_prob'] = n_channel[_]['<conversion>']/(n_channel[_]['<conversion>'] + n_channel[_]['<null>'])
 
-		print(n_channel)
-
 		# calculate channel contributions
 
 		for ch in self.channels:
-
-			self.C[ch] = n_channel[ch]['conv_prob']
 
 			for another_ch in set(self.channels) - {ch}:
 
@@ -250,9 +246,9 @@ class MCA:
 				else:
 					pr_both = 0
 
-				print('this:', n_channel[ch]['conv_prob'], 'both:', pr_both, 'another:', n_channel[another_ch]['conv_prob'])
+				self.C[ch] += (pr_both - n_channel[ch]['conv_prob'] - n_channel[another_ch]['conv_prob'])
 
-				self.C[ch] += (pr_both - n_channel[ch]['conv_prob'] - n_channel[another_ch]['conv_prob'])/(len(self.channels) - 1)
+			self.C[ch] = self.C[ch]/(2*(len(self.channels) - 1)) + n_channel[ch]['conv_prob']
 
 		return self
 
