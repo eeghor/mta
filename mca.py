@@ -1,12 +1,28 @@
 import pandas as pd
-from itertools import chain, tee
+from itertools import chain, tee, combinations
 from functools import reduce
 from operator import mul
-from collections import defaultdict, Counter
+from collections import defaultdict
 import random
 import time
 import numpy as np
 import copy
+
+def show_time(func):
+
+	"""
+	timer decorator
+	"""
+
+	def wrapper(*args, **kwargs):
+
+		t0 = time.time()
+		v = func(*args, **kwargs)
+		print('elapsed time: {:.0f} min {:.0f} sec'.format(*divmod(time.time() - t0, 60)))
+
+		return v
+
+	return wrapper
 
 class MCA:
 
@@ -32,10 +48,10 @@ class MCA:
 		print(f'exits: {self.data["total_null"].sum():,}')
 
 		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
-
+		self.removal_effects = defaultdict(float)
 		self.trans_probs = defaultdict(float)
 
-		random.seed(1)
+		self.C = defaultdict(float)
 
 	def heuristic_models(self):
 
@@ -86,7 +102,7 @@ class MCA:
 
 		return trans
 
-
+	@show_time
 	def trans_matrix(self):
 
 		print('estimating transition matrix...', end='')
@@ -119,6 +135,7 @@ class MCA:
 
 		return self
 
+	@show_time
 	def simulate_path(self, n=int(1e6), drop_state=None):
 
 		conv_or_null = defaultdict(int)
@@ -158,32 +175,94 @@ class MCA:
 
 		return conv_or_null
 
-	def removal_effects(self):
+	def calculate_removal_effects(self):
 
 		print('calculating removal effects...')
 
-		conversions_by_channel = defaultdict()
-		removal_effects = defaultdict(float)
+		cvs = defaultdict()  # conversions by channel
 
-		print('no removals...', end='')
-		conversions_by_channel['no_removals'] = self.simulate_path()
-		print('ok')
+		print('no removals...')
+		cvs['no_removals'] = self.simulate_path()
 
 		for i, ch in enumerate(self.channels, 1):
-			print(f'{i}/{len(self.channels)}: removed channel {ch}...', end='')
-			conversions_by_channel[ch] = self.simulate_path(drop_state=ch)
-			print('ok')
-			removal_effects[ch] = (conversions_by_channel['no_removals']['<conversion>'] - conversions_by_channel[ch]['<conversion>'])/conversions_by_channel['no_removals']['<conversion>']
+
+			print(f'{i}/{len(self.channels)}: removed channel {ch}...')
+
+			cvs[ch] = self.simulate_path(drop_state=ch)
+			self.removal_effects[ch] = round((cvs['no_removals']['<conversion>'] - 
+												cvs[ch]['<conversion>'])/cvs['no_removals']['<conversion>'], 6)
+
+		return self
+
+	def markov(self):
+
+		self.trans_matrix()
+		self.calculate_removal_effects()
+
+		return self
+
+	def shao(self):
+
+		"""
+		probabilistic model by Shao and Li (supposed to be equivalent to Shapley)
+		"""
+
+		n_channel = defaultdict(lambda: defaultdict(float))
+
+		# count user conversions and nulls for each visited channel and channel pair
+
+		for ch_list, convs, nulls in zip(self.data['path'], 
+											self.data['total_conversions'], 
+												self.data['total_null']):
+
+			for ch in set(ch_list):
+
+				n_channel[ch]['<conversion>'] += convs
+				n_channel[ch]['<null>'] += nulls
+
+			for ctup in combinations(set(ch_list), 2):
+
+				ctup_ = tuple(sorted(ctup))
+				n_channel[ctup_]['<conversion>'] += convs
+				n_channel[ctup_]['<null>'] += nulls
+
+		# now calculate conditional probabilities of conversion given exposure to channel or channel pair
+
+		for _ in n_channel:
+
+			n_channel[_]['conv_prob'] = n_channel[_]['<conversion>']/(n_channel[_]['<conversion>'] + n_channel[_]['<null>'])
+
+		print(n_channel)
+
+		# calculate channel contributions
 
 		for ch in self.channels:
-			print(f'{ch}: {removal_effects[ch]:.5f}')
+
+			self.C[ch] = n_channel[ch]['conv_prob']
+
+			for another_ch in set(self.channels) - {ch}:
+
+				if (ch, another_ch) in n_channel:
+					pr_both = n_channel[(ch, another_ch)]['conv_prob']
+				elif (another_ch, ch) in n_channel:
+					pr_both = n_channel[(another_ch, ch)]['conv_prob']
+
+				else:
+					pr_both = 0
+
+				print('this:', n_channel[ch]['conv_prob'], 'both:', pr_both, 'another:', n_channel[another_ch]['conv_prob'])
+
+				self.C[ch] += (pr_both - n_channel[ch]['conv_prob'] - n_channel[another_ch]['conv_prob'])/(len(self.channels) - 1)
 
 		return self
 
 
 if __name__ == '__main__':
 
-	mca = MCA() \
-			.heuristic_models() \
-			.trans_matrix() \
-			.removal_effects()
+	mca = MCA().heuristic_models() \
+				.shao()
+				# .markov() \
+				
+
+	# print(mca.removal_effects)
+	print(mca.C)
