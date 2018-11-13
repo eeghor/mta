@@ -30,8 +30,8 @@ class MCA:
 
 		self.data = pd.read_csv(data)
 
-		assert set(self.data.columns) <= set('path total_conversions total_conversion_value total_null'.split()), \
-						print(f'wrong column names in {data}!')
+		if not (set(self.data.columns) <= set('path total_conversions total_conversion_value total_null'.split())):
+			raise ValueError(f'wrong column names in {data}!')
 
 		# split journey into a list of visited channels
 		self.data['path'] = self.data['path'].str.split('>').apply(lambda _: [ch.strip() for ch in _]) 
@@ -42,16 +42,22 @@ class MCA:
 		# make dictionary mapping a channel name to it's index
 		self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
 
-		print(f'rows: {len(self.data):,}')
-		print(f'channels: {len(self.channels)}')
-		print(f'conversions: {self.data["total_conversions"].sum():,}')
-		print(f'exits: {self.data["total_null"].sum():,}')
-
 		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
 		self.removal_effects = defaultdict(float)
 		self.trans_probs = defaultdict(float)
 
 		self.C = defaultdict(float)
+
+	def show_data(self):
+
+		print(f'rows: {len(self.data):,}')
+		print(f'channels: {len(self.channels)}')
+		print(f'conversions: {self.data["total_conversions"].sum():,}')
+		print(f'exits: {self.data["total_null"].sum():,}')
+		print('sample:')
+		print(self.data.head())
+
+		return self
 
 	def normalize_dict(self, d):
 		"""
@@ -106,10 +112,8 @@ class MCA:
 				if t[0] != t[1]:
 					trans[t] += (convs + nulls)
 
-			if nulls:
-				trans[(ch_list[-1], '<null>')] += nulls
-			if convs:
-				trans[(ch_list[-1], '<conversion>')] += convs
+			trans[(ch_list[-1], '<null>')] += nulls
+			trans[(ch_list[-1], '<conversion>')] += convs
 
 		return trans
 
@@ -272,23 +276,24 @@ class MCA:
 											self.data['total_conversions'], 
 												self.data['total_null']):
 
-			for ch in set(ch_list):
+			for ch in ch_list:
 
 				n_channel[ch]['<conversion>'] += convs
 				n_channel[ch]['<null>'] += nulls
 
 			path_pairs = set()
 
-			for ctup in combinations(set(ch_list), 2):
+			for ctup in combinations(ch_list, 2):
 
-				ctup_ = tuple(sorted(ctup))
+				if ctup[0] != ctup[1]:
+					ctup_ = tuple(sorted(ctup))
 
-				if ctup_ not in path_pairs:
+					if ctup_ not in path_pairs:
 
-					path_pairs.add(ctup_)
+						path_pairs.add(ctup_)
 
-					n_channel[ctup_]['<conversion>'] += convs
-					n_channel[ctup_]['<null>'] += nulls
+						n_channel[ctup_]['<conversion>'] += convs
+						n_channel[ctup_]['<null>'] += nulls
 
 		# now calculate conditional probabilities of conversion given exposure to channel or channel pair
 
@@ -296,10 +301,10 @@ class MCA:
 
 			n_channel[_]['conv_prob'] = n_channel[_]['<conversion>']/(n_channel[_]['<conversion>'] + n_channel[_]['<null>'])
 
-			if n_channel[_]['conv_prob'] > 1:
-				print('pr>1!', n_channel[_]['conv_prob'])
 
 		# calculate channel contributions
+
+		u = set()
 
 		for ch in self.channels:
 
@@ -307,9 +312,10 @@ class MCA:
 
 				t = tuple(sorted((another_ch, ch)))
 
-				pr_both = n_channel[t]['conv_prob']
+				if t not in u:
+					u.add(t)
 
-				self.C[ch] += (pr_both - n_channel[ch]['conv_prob'] - n_channel[another_ch]['conv_prob'])
+					self.C[ch] += ((n_channel[t]['conv_prob'] - n_channel[ch]['conv_prob'] - n_channel[another_ch]['conv_prob']))
 
 			self.C[ch] = self.C[ch]/(2*(len(self.channels) - 1)) + n_channel[ch]['conv_prob']
 
