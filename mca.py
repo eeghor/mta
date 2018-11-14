@@ -214,34 +214,22 @@ class MCA:
 
 	def removal_probs(self, drop=None):
 
-		p_full = 0
+		_d = self.data[self.data['path'].apply(lambda x: drop not in x) & (self.data['total_conversions'] > 0)]
 
-		print('drop=', drop)
+		p = 0
 
-		d_ = self.data[~self.data['path'].apply(lambda x: drop in x) & (self.data['total_conversions'] > 0)]
+		for row in _d.itertuples():
 
-		p_paths = []
+			pr_this_path = []
 
-		for ch_list, convs in zip(d_['path'], d_['total_conversions']):
-			
-			p_path = 1
-
-			for t in self.pairs(['<start>'] + ch_list + ['<conversion>']):
+			for t in self.pairs(['<start>'] + row.path + ['<conversion>']):
 
 				if t[0] != t[1]:
-					p_path *= self.m[self.channels_to_idxs[t[0]]][self.channels_to_idxs[t[1]]]
+					pr_this_path.append(self.m[self.channels_to_idxs[t[0]]][self.channels_to_idxs[t[1]]])
 
-			p_paths.append(p_path)
+			p += reduce(mul, pr_this_path)*row.total_conversions
 
-			if p_path > 1:
-				print('p_path=', p_path)
-
-		p_full = sum(p_paths)
-		print(p_full)
-
-
-
-		return p_full
+		return p
 
 
 	def markov(self, normalize=True):
@@ -249,14 +237,18 @@ class MCA:
 		self.trans_matrix()
 		# self.calculate_removal_effects(normalize=normalize)
 		fl = self.removal_probs()
+		print('full model:', fl)
 
 		rp = defaultdict(float)
 
 		for ch in self.channels:
-			rp[ch] = (fl - self.removal_probs(drop=ch))/fl
+			p1 = self.removal_probs(drop=ch)
+			print(f'dropped {ch}:', p1)
+			rp[ch] = (fl - p1)/fl
 
 		rp = self.normalize_dict(rp)
 
+		print('markov:')
 		print(rp)
 
 
@@ -268,56 +260,37 @@ class MCA:
 		probabilistic model by Shao and Li (supposed to be equivalent to Shapley)
 		"""
 
-		n_channel = defaultdict(lambda: defaultdict(float))
+		r = defaultdict(lambda: defaultdict(float))
 
 		# count user conversions and nulls for each visited channel and channel pair
 
-		for ch_list, convs, nulls in zip(self.data['path'], 
-											self.data['total_conversions'], 
-												self.data['total_null']):
+		for row in self.data.itertuples():
 
-			for ch in ch_list:
+			for n in [1,2]:
+				for ch in combinations(set(row.path), n):
+					t = tuple(sorted(ch))
+					r[t]['<conversion>'] += row.total_conversions
+					r[t]['<null>'] += row.total_null
 
-				n_channel[ch]['<conversion>'] += convs
-				n_channel[ch]['<null>'] += nulls
-
-			path_pairs = set()
-
-			for ctup in combinations(ch_list, 2):
-
-				if ctup[0] != ctup[1]:
-					ctup_ = tuple(sorted(ctup))
-
-					if ctup_ not in path_pairs:
-
-						path_pairs.add(ctup_)
-
-						n_channel[ctup_]['<conversion>'] += convs
-						n_channel[ctup_]['<null>'] += nulls
-
-		# now calculate conditional probabilities of conversion given exposure to channel or channel pair
-
-		for _ in n_channel:
-
-			n_channel[_]['conv_prob'] = n_channel[_]['<conversion>']/(n_channel[_]['<conversion>'] + n_channel[_]['<null>'])
-
+		for _ in r:
+			r[_]['conv_prob'] = r[_]['<conversion>']/(r[_]['<conversion>'] + r[_]['<null>'])
 
 		# calculate channel contributions
 
-		u = set()
+		k = 2*(len(self.channels) - 1)
 
-		for ch in self.channels:
+		for this_ch in self.channels:
 
-			for another_ch in set(self.channels) - {ch}:
+			p_this = r[(this_ch,)]['conv_prob']
 
-				t = tuple(sorted((another_ch, ch)))
+			for ch in set(self.channels) - {this_ch}:
 
-				if t not in u:
-					u.add(t)
+				p_both = r[tuple(sorted((this_ch, ch)))]['conv_prob']
+				p_ch = r[(ch,)]['conv_prob']
+				
+				self.C[this_ch] += (p_both - p_this - p_ch)
 
-					self.C[ch] += ((n_channel[t]['conv_prob'] - n_channel[ch]['conv_prob'] - n_channel[another_ch]['conv_prob']))
-
-			self.C[ch] = self.C[ch]/(2*(len(self.channels) - 1)) + n_channel[ch]['conv_prob']
+			self.C[this_ch] = p_this + self.C[this_ch]/k
 
 		if normalize:
 			self.C = self.normalize_dict(self.C)
