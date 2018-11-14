@@ -34,19 +34,19 @@ class MCA:
 			raise ValueError(f'wrong column names in {data}!')
 
 		# split journey into a list of visited channels
-		self.data['path'] = self.data['path'].str.split('>').apply(lambda _: [ch.strip() for ch in _]) 
-		# make a sorted list of channel names
-		self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
-		# add some extra channels
-		self.channels_ext = ['<start>'] + self.channels + ['<conversion>', '<null>']
-		# make dictionary mapping a channel name to it's index
-		self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
+		# self.data['path'] = self.data['path'].str.split('>').apply(lambda _: [ch.strip() for ch in _]) 
+		# # make a sorted list of channel names
+		# self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
+		# # add some extra channels
+		# self.channels_ext = ['<start>'] + self.channels + ['<conversion>', '<null>']
+		# # make dictionary mapping a channel name to it's index
+		# self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
 
-		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
-		self.removal_effects = defaultdict(float)
-		self.trans_probs = defaultdict(float)
+		# self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
+		# self.removal_effects = defaultdict(float)
+		# self.trans_probs = defaultdict(float)
 
-		self.C = defaultdict(float)
+		# self.C = defaultdict(float)
 
 	def show_data(self):
 
@@ -56,6 +56,39 @@ class MCA:
 		print(f'exits: {self.data["total_null"].sum():,}')
 		print('sample:')
 		print(self.data.head())
+
+		return self
+
+	def remove_loops(self):
+
+		cpath = []
+
+		for row in self.data.itertuples():
+
+			clean_path = []
+
+			for i, p in enumerate([w.strip() for w in row.path.split('>')], 1):
+
+				if i == 1:
+					clean_path.append(p)
+				else:
+					if p != clean_path[-1]:
+						clean_path.append(p)
+
+			cpath.append(' > '.join(clean_path))
+
+
+		s = pd.DataFrame({'path': cpath})
+
+		self.data_ = pd.concat([s, self.data[[c for c in self.data.columns if c != 'path']]], axis=1)
+
+		print(self.data_.head())
+		print(len(self.data_))
+
+		self.data_ = self.data_.groupby('path').sum().reset_index()
+
+		print(self.data_.head())
+		print(len(self.data_))
 
 		return self
 
@@ -368,16 +401,19 @@ if __name__ == '__main__':
 
 	mca = MCA()
 
-	mca.markov()
+	mca.remove_loops()
+	print(mca.data_.head())
 
-	# # print('Markov:\n', mca.removal_effects)
+	# mca.markov()
 
-	# # mca.get_generated_conversions(max_subset_size=3)
+	# # # print('Markov:\n', mca.removal_effects)
 
-	mca.shapley()
+	# # # mca.get_generated_conversions(max_subset_size=3)
 
-	print('Shapley:\n',mca.phi)
+	# mca.shapley()
 
-	mca.shao()
+	# print('Shapley:\n',mca.phi)
 
-	print('Shao:\n',mca.C)
+	# mca.shao()
+
+	# print('Shao:\n',mca.C)
