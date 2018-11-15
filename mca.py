@@ -26,27 +26,30 @@ def show_time(func):
 
 class MCA:
 
-	def __init__(self, data='data/data.csv'):
+	def __init__(self, data='data/data.csv', allow_loops=False):
 
 		self.data = pd.read_csv(data)
 
 		if not (set(self.data.columns) <= set('path total_conversions total_conversion_value total_null'.split())):
 			raise ValueError(f'wrong column names in {data}!')
 
-		# split journey into a list of visited channels
-		# self.data['path'] = self.data['path'].str.split('>').apply(lambda _: [ch.strip() for ch in _]) 
-		# # make a sorted list of channel names
-		# self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
-		# # add some extra channels
-		# self.channels_ext = ['<start>'] + self.channels + ['<conversion>', '<null>']
-		# # make dictionary mapping a channel name to it's index
-		# self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
+		if not allow_loops:
+			self.remove_loops()
 
-		# self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
-		# self.removal_effects = defaultdict(float)
-		# self.trans_probs = defaultdict(float)
+		#split journey into a list of visited channels
+		self.data['path'] = self.data['path'].str.split('>').apply(lambda _: [ch.strip() for ch in _]) 
+		# make a sorted list of channel names
+		self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
+		# add some extra channels
+		self.channels_ext = ['<start>'] + self.channels + ['<conversion>', '<null>']
+		# make dictionary mapping a channel name to it's index
+		self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
 
-		# self.C = defaultdict(float)
+		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
+		self.removal_effects = defaultdict(float)
+		self.trans_probs = defaultdict(float)
+
+		self.C = defaultdict(float)
 
 	def show_data(self):
 
@@ -60,6 +63,10 @@ class MCA:
 		return self
 
 	def remove_loops(self):
+
+		"""
+		remove transitions from a channel directly to itself, e.g. a > a
+		"""
 
 		cpath = []
 
@@ -77,18 +84,10 @@ class MCA:
 
 			cpath.append(' > '.join(clean_path))
 
+		self.data_ = pd.concat([pd.DataFrame({'path': cpath}), 
+								self.data[[c for c in self.data.columns if c != 'path']]], axis=1)
 
-		s = pd.DataFrame({'path': cpath})
-
-		self.data_ = pd.concat([s, self.data[[c for c in self.data.columns if c != 'path']]], axis=1)
-
-		print(self.data_.head())
-		print(len(self.data_))
-
-		self.data_ = self.data_.groupby('path').sum().reset_index()
-
-		print(self.data_.head())
-		print(len(self.data_))
+		self.data = self.data_.groupby('path').sum().reset_index()
 
 		return self
 
@@ -260,7 +259,7 @@ class MCA:
 				if t[0] != t[1]:
 					pr_this_path.append(self.m[self.channels_to_idxs[t[0]]][self.channels_to_idxs[t[1]]])
 
-			p += reduce(mul, pr_this_path)*row.total_conversions
+			p += reduce(mul, pr_this_path)
 
 		return p
 
@@ -270,13 +269,12 @@ class MCA:
 		self.trans_matrix()
 		# self.calculate_removal_effects(normalize=normalize)
 		fl = self.removal_probs()
-		print('full model:', fl)
 
 		rp = defaultdict(float)
 
 		for ch in self.channels:
+			
 			p1 = self.removal_probs(drop=ch)
-			print(f'dropped {ch}:', p1)
 			rp[ch] = (fl - p1)/fl
 
 		rp = self.normalize_dict(rp)
@@ -300,7 +298,9 @@ class MCA:
 		for row in self.data.itertuples():
 
 			for n in [1,2]:
+
 				for ch in combinations(set(row.path), n):
+					
 					t = tuple(sorted(ch))
 					r[t]['<conversion>'] += row.total_conversions
 					r[t]['<null>'] += row.total_null
@@ -321,7 +321,7 @@ class MCA:
 				p_both = r[tuple(sorted((this_ch, ch)))]['conv_prob']
 				p_ch = r[(ch,)]['conv_prob']
 				
-				self.C[this_ch] += (p_both - p_this - p_ch)
+				self.C[this_ch] += (p_both - p_ch - p_this)
 
 			self.C[this_ch] = p_this + self.C[this_ch]/k
 
@@ -399,21 +399,16 @@ class MCA:
 
 if __name__ == '__main__':
 
-	mca = MCA()
+	mca = MCA(allow_loops=False)
 
-	mca.remove_loops()
-	print(mca.data_.head())
+	mca.show_data()
 
-	# mca.markov()
+	mca.markov()
 
-	# # # print('Markov:\n', mca.removal_effects)
+	mca.shapley(max_coalition_size=4)
 
-	# # # mca.get_generated_conversions(max_subset_size=3)
+	print('Shapley:\n',mca.phi)
 
-	# mca.shapley()
+	mca.shao()
 
-	# print('Shapley:\n',mca.phi)
-
-	# mca.shao()
-
-	# print('Shao:\n',mca.C)
+	print('Shao:\n',mca.C)
