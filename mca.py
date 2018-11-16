@@ -7,7 +7,6 @@ import random
 import time
 import numpy as np
 import copy
-import json
 
 def show_time(func):
 
@@ -25,7 +24,7 @@ def show_time(func):
 
 	return wrapper
 
-class MTA:
+class MCA:
 
 	def __init__(self, data='data/data.csv', allow_loops=False):
 
@@ -42,7 +41,7 @@ class MTA:
 		# make a sorted list of channel names
 		self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
 		# add some extra channels
-		self.channels_ext = ['(start)'] + self.channels + ['(conversion)', '(null)']
+		self.channels_ext = ['<start>'] + self.channels + ['<conversion>', '<null>']
 		# make dictionary mapping a channel name to it's index
 		self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
 
@@ -132,47 +131,28 @@ class MTA:
 
 	def count_pairs(self):
 
-		"""
-		count how many times channel pairs appear on all recorded customer journey paths
-		"""
+		# ignore loops
 
-		c = defaultdict(int)
+		trans = defaultdict(int)
 
-		for row in self.data.itertuples():
+		for ch_list, convs, nulls in zip(self.data['path'], 
+											self.data['total_conversions'], 
+												self.data['total_null']):
 
-			for ch_pair in self.pairs(['(start)'] + row.path):
-				c[ch_pair] += (row.total_conversions + row.total_null)
+			for t in self.pairs(['<start>'] + ch_list):
 
-			c[(row.path[-1], '(null)')] += row.total_null
-			c[(row.path[-1], '(conversion)')] += row.total_conversions
+				if t[0] != t[1]:
+					trans[t] += (convs + nulls)
 
-		return c
+			trans[(ch_list[-1], '<null>')] += nulls
+			trans[(ch_list[-1], '<conversion>')] += convs
 
-	def ordered_tuple(self, t):
-
-		"""
-		return tuple t ordered 
-		"""
-
-		if not isinstance(t, tuple):
-			raise TypeError(f'provided value {t} is not tuple!')
-
-		if all([len(t) == 1, t[0] in '(start) (null) (conversion)'.split()]):
-			raise Exception(f'wrong transition {t}!')
-
-		if (len(t) > 1) and (t[-1] == '(start)'): 
-			raise Exception(f'wrong transition {t}!')
-
-		if (len(t) > 1) and (t[0] == '(start)'):
-			return (t[0],) + tuple(sorted(list(t[1:])))
-
-		if (len(t) > 1) and (t[-1] in '(null) (conversion)'.split()):
-			return tuple(sorted(list(t[:-1]))) + (t[-1],)
-
-		return tuple(sorted(list(t)))
+		return trans
 
 	@show_time
 	def trans_matrix(self):
+
+		print('estimating transition matrix...', end='')
 
 		ways_from = defaultdict(int)
 
@@ -194,10 +174,11 @@ class MTA:
 
 			self.m[idx_channel_from][idx_channel_to] = self.trans_probs[p]
 
-		tp = defaultdict()
-		for tup in self.trans_probs:
-			tp['->'.join(self.ordered_tuple(tup))] = self.trans_probs[tup]
-		json.dump(tp, open('trp.json','w'))
+		# check if sums of rows are equal to one
+		for ch in self.channels:
+			assert np.abs(np.sum(self.m[self.channels_to_idxs[ch]]) - 1) < 1e-6, print(f'row values for channel {ch} don\'t sum up to one!')
+
+		print('ok')
 
 		return self
 
@@ -207,14 +188,14 @@ class MTA:
 		conv_or_null = defaultdict(int)
 		channel_idxs = list(self.channels_to_idxs.values())
 
-		null_idx = self.channels_to_idxs['(null)']
+		null_idx = self.channels_to_idxs['<null>']
 
 		m = copy.copy(self.m)
 
 		if drop_state:
 
 			drop_idx = self.channels_to_idxs[drop_state]
-			# no exit from this state, i.e. it becomes (null)
+			# no exit from this state, i.e. it becomes <null>
 			m[drop_idx] = 0
 
 		else:
@@ -223,18 +204,18 @@ class MTA:
 
 		for _ in range(n):
 
-			init_idx = self.channels_to_idxs['(start)']
+			init_idx = self.channels_to_idxs['<start>']
 			final_state = None
 
 			while not final_state:
 
 				next_idx = np.random.choice(channel_idxs, p=m[init_idx], replace=False)
 
-				if next_idx == self.channels_to_idxs['(conversion)']:
-					conv_or_null['(conversion)'] += 1
+				if next_idx == self.channels_to_idxs['<conversion>']:
+					conv_or_null['<conversion>'] += 1
 					final_state = True
 				elif next_idx in {null_idx, drop_idx}:
-					conv_or_null['(null)'] += 1
+					conv_or_null['<null>'] += 1
 					final_state = True
 				else:
 					init_idx = next_idx
@@ -255,8 +236,8 @@ class MTA:
 			print(f'{i}/{len(self.channels)}: removed channel {ch}...')
 
 			cvs[ch] = self.simulate_path(drop_state=ch)
-			self.removal_effects[ch] = round((cvs['no_removals']['(conversion)'] - 
-												cvs[ch]['(conversion)'])/cvs['no_removals']['(conversion)'], 6)
+			self.removal_effects[ch] = round((cvs['no_removals']['<conversion>'] - 
+												cvs[ch]['<conversion>'])/cvs['no_removals']['<conversion>'], 6)
 
 		if normalize:
 			self.removal_effects = self.normalize_dict(self.removal_effects)
@@ -273,7 +254,7 @@ class MTA:
 
 			pr_this_path = []
 
-			for t in self.pairs(['(start)'] + row.path + ['(conversion)']):
+			for t in self.pairs(['<start>'] + row.path + ['<conversion>']):
 
 				if t[0] != t[1]:
 					pr_this_path.append(self.m[self.channels_to_idxs[t[0]]][self.channels_to_idxs[t[1]]])
@@ -320,13 +301,12 @@ class MTA:
 
 				for ch in combinations(set(row.path), n):
 					
-					t = self.ordered_tuple(ch)
-
-					r[t]['(conversion)'] += row.total_conversions
-					r[t]['(null)'] += row.total_null
+					t = tuple(sorted(ch))
+					r[t]['<conversion>'] += row.total_conversions
+					r[t]['<null>'] += row.total_null
 
 		for _ in r:
-			r[_]['conv_prob'] = r[_]['(conversion)']/(r[_]['(conversion)'] + r[_]['(null)'])
+			r[_]['conv_prob'] = r[_]['<conversion>']/(r[_]['<conversion>'] + r[_]['<null>'])
 
 		# calculate channel contributions
 
@@ -336,14 +316,11 @@ class MTA:
 
 			p_this = r[(this_ch,)]['conv_prob']
 
-			comps = []
-
 			for ch in set(self.channels) - {this_ch}:
 
-				p_both = r[self.ordered_tuple((this_ch, ch))]['conv_prob']
+				p_both = r[tuple(sorted((this_ch, ch)))]['conv_prob']
 				p_ch = r[(ch,)]['conv_prob']
-				comps.append(p_both - p_ch - p_this)
-
+				
 				self.C[this_ch] += (p_both - p_ch - p_this)
 
 			self.C[this_ch] = p_this + self.C[this_ch]/k
@@ -366,10 +343,10 @@ class MTA:
 
 				for tup in combinations(set(ch_list), n):
 
-					tup_ = self.ordered_tuple(tup)
+					tup_ = tuple(sorted(tup))
 
-					self.cc[tup_]['(conversion)'] += convs
-					self.cc[tup_]['(null)'] += nulls
+					self.cc[tup_]['<conversion>'] += convs
+					self.cc[tup_]['<null>'] += nulls
 
 		return self
 
@@ -386,8 +363,8 @@ class MTA:
 
 		for n in range(1, s+1):
 			for tup in combinations(coalition, n):
-				tup_ = self.ordered_tuple(tup)
-				total_convs += self.cc[tup_]['(conversion)']
+				tup_ = tuple(sorted(tup))
+				total_convs += self.cc[tup_]['<conversion>']
 
 		return total_convs
 
@@ -422,13 +399,13 @@ class MTA:
 
 if __name__ == '__main__':
 
-	mca = MTA(allow_loops=False)
+	mca = MCA(allow_loops=False)
 
 	mca.show_data()
 
 	mca.markov()
 
-	mca.shapley(max_coalition_size=2)
+	mca.shapley(max_coalition_size=4)
 
 	print('Shapley:\n',mca.phi)
 
