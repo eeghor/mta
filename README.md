@@ -1,5 +1,7 @@
-# mca
-Multi-Channel Attribution
+# mta
+Multi-Touch Attribution. Find out which channels contribute most to user conversion. 
+
+This package contains implementations of a number of Multi-Touch Attribution models. It comes with the same test data as the R package called ChannelAttrobution https://cran.r-project.org/web/packages/ChannelAttribution/ChannelAttribution.pdf
 
 * Nisar and Yeung (2015) - Purchase Conversions and Attribution Modeling in Online Advertising: An Empirical Investigation [pdf](https://eprints.soton.ac.uk/380534/1/GHLEFMG_FGMJHM_VJ1QM9QF.pdf)
 * Shao and Li (2011)  - Data-driven Multi-touch Attribution Models [pdf](http://www0.cs.ucl.ac.uk/staff/w.zhang/rtb-papers/data-conv-att.pdf)

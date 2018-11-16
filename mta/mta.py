@@ -7,6 +7,7 @@ import random
 import time
 import numpy as np
 import copy
+import json
 
 def show_time(func):
 
@@ -179,6 +180,10 @@ class MCA:
 			assert np.abs(np.sum(self.m[self.channels_to_idxs[ch]]) - 1) < 1e-6, print(f'row values for channel {ch} don\'t sum up to one!')
 
 		print('ok')
+		tp = defaultdict()
+		for tup in self.trans_probs:
+			tp['->'.join(list(tup))] = self.trans_probs[tup]
+		json.dump(tp, open('trp.json','w'))
 
 		return self
 
@@ -316,14 +321,27 @@ class MCA:
 
 			p_this = r[(this_ch,)]['conv_prob']
 
+			comps = []
+
 			for ch in set(self.channels) - {this_ch}:
 
 				p_both = r[tuple(sorted((this_ch, ch)))]['conv_prob']
+				print(f'{tuple(sorted((this_ch, ch)))} {p_both}')
 				p_ch = r[(ch,)]['conv_prob']
-				
+				print(f'{(ch,)} {p_ch}')
+				print(f'{(this_ch,)} {p_this}')
+				comps.append(p_both - p_ch - p_this)
+
 				self.C[this_ch] += (p_both - p_ch - p_this)
 
+
+
 			self.C[this_ch] = p_this + self.C[this_ch]/k
+
+			print(sum(comps)/k + p_this, self.C[this_ch])
+		
+		for _ in self.C:
+			print(f'{_}: {self.C[_]} {self.C[_]/sum(self.C.values())}')
 
 		if normalize:
 			self.C = self.normalize_dict(self.C)
