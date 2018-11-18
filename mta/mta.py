@@ -176,6 +176,7 @@ class MTA:
 
 		ways_from = defaultdict(int)
 
+		# here pairs are unordered
 		pair_counts = self.count_pairs()
 
 		for pair in pair_counts:
@@ -196,7 +197,7 @@ class MTA:
 
 		tp = defaultdict()
 		for tup in self.trans_probs:
-			tp['->'.join(self.ordered_tuple(tup))] = self.trans_probs[tup]
+			tp['->'.join(tup)] = self.trans_probs[tup]
 		json.dump(tp, open('trp.json','w'))
 
 		return self
@@ -275,8 +276,7 @@ class MTA:
 
 			for t in self.pairs(['(start)'] + row.path + ['(conversion)']):
 
-				if t[0] != t[1]:
-					pr_this_path.append(self.m[self.channels_to_idxs[t[0]]][self.channels_to_idxs[t[1]]])
+				pr_this_path.append(self.m[self.channels_to_idxs[t[0]]][self.channels_to_idxs[t[1]]])
 
 			p += reduce(mul, pr_this_path)
 
@@ -336,13 +336,10 @@ class MTA:
 
 			p_this = r[(this_ch,)]['conv_prob']
 
-			comps = []
-
 			for ch in set(self.channels) - {this_ch}:
 
 				p_both = r[self.ordered_tuple((this_ch, ch))]['conv_prob']
 				p_ch = r[(ch,)]['conv_prob']
-				comps.append(p_both - p_ch - p_this)
 
 				self.C[this_ch] += (p_both - p_ch - p_this)
 
