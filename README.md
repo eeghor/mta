@@ -1,7 +1,13 @@
 # mta
 Multi-Touch Attribution. Find out which channels contribute most to user conversion. 
 
-This package contains implementations of a number of Multi-Touch Attribution models. 
+### Nodels
+
+This package contains implementations the following Multi-Touch Attribution models:
+
+* Shapley 
+* Markov
+* So-called Simple Probabilistic Model by Shao and Li
 
 ### Included Data
 

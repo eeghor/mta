@@ -50,7 +50,7 @@ class MTA:
 		self.removal_effects = defaultdict(float)
 		self.trans_probs = defaultdict(float)
 
-		self.C = defaultdict(float)
+		self.attribution = defaultdict(lambda: defaultdict(float))
 
 	def show_data(self):
 
@@ -307,7 +307,9 @@ class MTA:
 	def shao(self, normalize=True):
 
 		"""
-		probabilistic model by Shao and Li (supposed to be equivalent to Shapley)
+		probabilistic model by Shao and Li (supposed to be equivalent to Shapley); explanation in the original paper may seem rather unclear but
+		this https://stats.stackexchange.com/questions/255312/multi-channel-attribution-modelling-using-a-simple-probabilistic-model 
+		is definitely helpful
 		"""
 
 		r = defaultdict(lambda: defaultdict(float))
@@ -330,23 +332,35 @@ class MTA:
 
 		# calculate channel contributions
 
-		k = 2*(len(self.channels) - 1)
+		self.C = defaultdict(float)
 
-		for this_ch in self.channels:
+		for row in self.data.itertuples():
 
-			p_this = r[(this_ch,)]['conv_prob']
+			for ch_i in set(row.path):
 
-			for ch in set(self.channels) - {this_ch}:
+				if row.total_conversions:
 
-				p_both = r[self.ordered_tuple((this_ch, ch))]['conv_prob']
-				p_ch = r[(ch,)]['conv_prob']
+					pc = 0    # contribution for current path
 
-				self.C[this_ch] += (p_both - p_ch - p_this)
+					other_channels = set(row.path) - {ch_i}
 
-			self.C[this_ch] = p_this + self.C[this_ch]/k
+					k = 2*len(other_channels) if other_channels else 1 
+
+					for ch_j in other_channels:
+
+						pc += (r[self.ordered_tuple((ch_i, ch_j))]['conv_prob'] - 
+														r[(ch_i,)]['conv_prob'] - 
+														r[(ch_j,)]['conv_prob'])
+
+					pc = r[(ch_i,)]['conv_prob']  + pc/k
+
+					self.C[ch_i] += row.total_conversions*pc
+
 
 		if normalize:
 			self.C = self.normalize_dict(self.C)
+
+		self.attribution['shao'] = self.C
 
 		return self
 
@@ -415,20 +429,14 @@ class MTA:
 		if normalize:
 			self.phi = self.normalize_dict(self.phi)
 
+		self.attribution['shapley'] = self.phi
+
 		return self
 
 if __name__ == '__main__':
 
-	mca = MTA(allow_loops=False)
+	mta = MTA(allow_loops=False)
 
-	mca.show_data()
+	mta.shapley(max_coalition_size=2).shao()
 
-	mca.markov()
-
-	mca.shapley(max_coalition_size=2)
-
-	print('Shapley:\n',mca.phi)
-
-	mca.shao()
-
-	print('Shao:\n',mca.C)
+	print(mta.attribution)
