@@ -8,6 +8,10 @@ import time
 import numpy as np
 import copy
 import json
+import os
+
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
 
 def show_time(func):
 
@@ -27,9 +31,9 @@ def show_time(func):
 
 class MTA:
 
-	def __init__(self, data='data/data.csv', allow_loops=False):
+	def __init__(self, data='data.csv.gz', allow_loops=False):
 
-		self.data = pd.read_csv(data)
+		self.data = pd.read_csv(os.path.join('data', data))
 
 		if not (set(self.data.columns) <= set('path total_conversions total_conversion_value total_null'.split())):
 			raise ValueError(f'wrong column names in {data}!')
@@ -44,11 +48,10 @@ class MTA:
 		# add some extra channels
 		self.channels_ext = ['(start)'] + self.channels + ['(conversion)', '(null)']
 		# make dictionary mapping a channel name to it's index
-		self.channels_to_idxs = {c: i for i, c in enumerate(self.channels_ext)}
+		self.c2i = {c: i for i, c in enumerate(self.channels_ext)}
 
 		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
 		self.removal_effects = defaultdict(float)
-		self.trans_probs = defaultdict(float)
 
 		self.attribution = defaultdict(lambda: defaultdict(float))
 
@@ -283,50 +286,38 @@ class MTA:
 
 		return tuple(sorted(list(t)))
 
-	@show_time
 	def trans_matrix(self):
 
-		ways_from = defaultdict(int)
+		trans_probs = defaultdict(float)
+
+		outs = defaultdict(int)
 
 		# here pairs are unordered
 		pair_counts = self.count_pairs()
 
 		for pair in pair_counts:
 
-			ways_from[pair[0]] += pair_counts[pair]
+			outs[pair[0]] += pair_counts[pair]
 
 		for pair in pair_counts:
 
-			outs = ways_from.get(pair[0], 0)
-			self.trans_probs[pair] = pair_counts[pair]/outs if outs else 0
+			trans_probs[pair] = pair_counts[pair]/outs[pair[0]]
 
-		for p in self.trans_probs:
-
-			idx_channel_from = self.channels_to_idxs[p[0]]
-			idx_channel_to = self.channels_to_idxs[p[1]]
-
-			self.m[idx_channel_from][idx_channel_to] = self.trans_probs[p]
-
-		tp = defaultdict()
-		for tup in self.trans_probs:
-			tp['->'.join(tup)] = self.trans_probs[tup]
-		json.dump(tp, open('trp.json','w'))
-
-		return self
+		return trans_probs
 
 	@show_time
 	def simulate_path(self, n=int(1e6), drop_state=None):
 
 		conv_or_null = defaultdict(int)
-		channel_idxs = list(self.channels_to_idxs.values())
+		channel_idxs = list(self.c2i.values())
 
-		null_idx = self.channels_to_idxs['(null)']
+		null_idx = self.c2i['(null)']
 
 		m = copy.copy(self.m)
 
 		if drop_state:
 
-			drop_idx = self.channels_to_idxs[drop_state]
+			drop_idx = self.c2i[drop_state]
 			# no exit from this state, i.e. it becomes (null)
 			m[drop_idx] = 0
 
@@ -336,14 +327,14 @@ class MTA:
 
 		for _ in range(n):
 
-			init_idx = self.channels_to_idxs['(start)']
+			init_idx = self.c2i['(start)']
 			final_state = None
 
 			while not final_state:
 
 				next_idx = np.random.choice(channel_idxs, p=m[init_idx], replace=False)
 
-				if next_idx == self.channels_to_idxs['(conversion)']:
+				if next_idx == self.c2i['(conversion)']:
 					conv_or_null['(conversion)'] += 1
 					final_state = True
 				elif next_idx in {null_idx, drop_idx}:
@@ -360,7 +351,6 @@ class MTA:
 
 		cvs = defaultdict()  # conversions by channel
 
-		print('no removals...')
 		cvs['no_removals'] = self.simulate_path()
 
 		for i, ch in enumerate(self.channels, 1):
@@ -376,7 +366,7 @@ class MTA:
 
 		return self
 
-	def removal_probs(self, drop=None):
+	def prob_convert(self, trans_mat, drop=None):
 
 		_d = self.data[self.data['path'].apply(lambda x: drop not in x) & (self.data['total_conversions'] > 0)]
 
@@ -388,30 +378,28 @@ class MTA:
 
 			for t in self.pairs(['(start)'] + row.path + ['(conversion)']):
 
-				pr_this_path.append(self.m[self.channels_to_idxs[t[0]]][self.channels_to_idxs[t[1]]])
+				pr_this_path.append(trans_mat.get(t, 0))
 
 			p += reduce(mul, pr_this_path)
 
 		return p
 
 
-	def markov(self, normalize=True):
+	def markov(self, sim=False, normalize=True):
 
-		self.trans_matrix()
-		# self.calculate_removal_effects(normalize=normalize)
-		fl = self.removal_probs()
+		markov = defaultdict(float)
 
-		rp = defaultdict(float)
+		tr = self.trans_matrix()
 
-		for ch in self.channels:
-			
-			p1 = self.removal_probs(drop=ch)
-			rp[ch] = (fl - p1)/fl
+		p_conv = self.prob_convert(trans_mat=tr)
 
-		rp = self.normalize_dict(rp)
+		for c in self.channels:
+			markov[c] = (p_conv - self.prob_convert(trans_mat=tr, drop=c))/p_conv
 
-		print('markov:')
-		print(rp)
+		if normalize:
+			markov = self.normalize_dict(markov)
+
+		self.attribution['markov'] = markov
 
 
 		return self
@@ -545,10 +533,16 @@ class MTA:
 
 		return self
 
+	def linear_regression(self):
+
+		# split into training/test set
+
+		X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=36)
+
 if __name__ == '__main__':
 
-	mta = MTA(allow_loops=True)
+	mta = MTA(allow_loops=False)
 
-	mta.linear(share='proportional').time_decay(count_direction='right').shapley().shao().first_touch().last_touch()
+	mta.linear(share='proportional').time_decay(count_direction='right').shapley().shao().first_touch().last_touch().markov()
 
 	print(pd.DataFrame.from_dict(mta.attribution))
