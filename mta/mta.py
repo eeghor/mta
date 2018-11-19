@@ -2,7 +2,7 @@ import pandas as pd
 from itertools import chain, tee, combinations
 from functools import reduce
 from operator import mul
-from collections import defaultdict
+from collections import defaultdict, Counter
 import random
 import time
 import numpy as np
@@ -103,6 +103,54 @@ class MTA:
 
 		return d
 
+	def linear(self, share='same'):
+
+		"""
+		either give exactly the same share of conversions to each visited channel (option share=same) or
+		distribute the shares proportionally, i.e. if a channel 1 appears 2 times on the path and channel 2 once
+		then channel 1 will receive x2 credit
+
+		note: to obtain the same result as ChannelAttbribution produces for the test data set, you need to
+
+			- select share=proportional
+			- allow loops - use the data set as is without any modifications
+		"""
+
+		self.linear = defaultdict(float)
+
+		for row in self.data.itertuples():
+
+			if row.total_conversions:
+
+				if share == 'same':
+
+					n = len(set(row.path))    # number of unique channels visited during the journey
+					s = row.total_conversions/n    # each channel is getting an equal share of conversions
+
+					for c in set(row.path):
+						self.linear[c] += s
+
+				elif share == 'proportional':
+
+					c_counts = Counter(row.path)  # count how many times channels appear on this path
+					tot_appearances = sum(c_counts.values())
+
+					c_shares = defaultdict(float)
+
+					for c in c_counts:
+
+						c_shares[c] = c_counts[c]/tot_appearances
+
+					for c in set(row.path):
+
+						self.linear[c] += row.total_conversions*c_shares[c]
+
+		print(self.linear)
+
+		self.linear = self.normalize_dict(self.linear)
+
+		print(self.linear)
+
 	def heuristic_models(self):
 
 		"""
@@ -111,6 +159,7 @@ class MTA:
 
 		self.first_touch = []
 		self.last_touch = []
+		
 
 		for c in self.channels_ext:
 
@@ -435,8 +484,6 @@ class MTA:
 
 if __name__ == '__main__':
 
-	mta = MTA(allow_loops=False)
+	mta = MTA(allow_loops=True)
 
-	mta.shapley(max_coalition_size=2).shao()
-
-	print(mta.attribution)
+	mta.linear(share='proportional')
