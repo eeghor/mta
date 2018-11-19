@@ -14,6 +14,7 @@ In addition, some popular heuristic “models” are included, specifically
 * First Touch
 * Linear
 * Last Touch
+* Time Decay
 
 ### Included Data
 

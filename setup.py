@@ -2,7 +2,7 @@ from setuptools import setup
 import os
 
 setup(name='mta',
-      version='0.0.1',
+      version='0.0.2',
       description='Multi-Touch Attrobution',
       classifiers=[
       	'Development Status :: 3 - Alpha',

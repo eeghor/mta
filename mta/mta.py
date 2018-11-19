@@ -103,18 +103,21 @@ class MTA:
 
 		return d
 
-	def linear(self, share='same'):
+	def linear(self, share='same', normalize=True):
 
 		"""
 		either give exactly the same share of conversions to each visited channel (option share=same) or
 		distribute the shares proportionally, i.e. if a channel 1 appears 2 times on the path and channel 2 once
-		then channel 1 will receive x2 credit
+		then channel 1 will receive double credit
 
 		note: to obtain the same result as ChannelAttbribution produces for the test data set, you need to
 
 			- select share=proportional
 			- allow loops - use the data set as is without any modifications
 		"""
+
+		if share not in 'same proportional'.split():
+			raise ValueError('share parameter must be either *same* or *proportional*!')
 
 		self.linear = defaultdict(float)
 
@@ -145,30 +148,90 @@ class MTA:
 
 						self.linear[c] += row.total_conversions*c_shares[c]
 
-		print(self.linear)
+		if normalize:
+			self.linear = self.normalize_dict(self.linear)
 
-		self.linear = self.normalize_dict(self.linear)
+		self.attribution['linear'] = self.linear
 
-		print(self.linear)
+		return self
 
-	def heuristic_models(self):
+	def time_decay(self, count_direction='left', normalize=True):
 
 		"""
-		calculate channel contributions assuming the last and first touch attribution
+		time decay - the closer to conversion was exposure to a channel, the more credit this channel gets
+
+		this can work differently depending how you get timing sorted. 
+
+		example: a > b > c > b > a > c > (conversion)
+	
+		we can count timing backwards: c the latest, then a, then b (lowest credit) and done. Or we could count left to right, i.e.
+		a first (lowest credit), then b, then c. 
+
 		"""
 
-		self.first_touch = []
-		self.last_touch = []
-		
+		self.time_decay = defaultdict(float)
 
-		for c in self.channels_ext:
+		if count_direction not in 'left right'.split():
+			raise ValueError('argument count_direction must be *left* or *right*!')
 
-			self.first_touch.append((c, self.data.loc[self.data['path'].apply(lambda _: _[0] == c), 'total_conversions'].sum()))
-			self.last_touch.append((c, self.data.loc[self.data['path'].apply(lambda _: _[-1] == c), 'total_conversions'].sum()))
+		for row in self.data.itertuples():
 
-		# rank from high to low
-		self.first_touch = sorted(self.first_touch, key=lambda x: x[1], reverse=True)
-		self.last_touch = sorted(self.last_touch, key=lambda x: x[1], reverse=True)
+			if row.total_conversions:
+
+				channels_by_exp_time = []
+
+				_ = row.path if count_direction == 'left' else row.path[::-1]
+
+				for c in _:
+					if c not in channels_by_exp_time:
+						channels_by_exp_time.append(c)
+
+				if count_direction == 'right':
+					channels_by_exp_time = channels_by_exp_time[::-1]
+
+				# first channel gets 1, second 2, etc.
+
+				score_unit = 1./sum(range(1, len(channels_by_exp_time) + 1))
+
+				for i, c in enumerate(channels_by_exp_time, 1):
+					self.time_decay[c] += i*score_unit*row.total_conversions
+
+		if normalize:
+			self.time_decay = self.normalize_dict(self.time_decay)
+
+		self.attribution['time_decay'] = self.time_decay
+
+		return self
+
+	def first_touch(self, normalize=True):
+
+		first_touch = defaultdict(int)
+
+		for c in self.channels:
+
+			# total conversions for all paths where the first channel was c
+			first_touch[c] = self.data.loc[self.data['path'].apply(lambda _: _[0] == c), 'total_conversions'].sum()
+
+		if normalize:
+			first_touch = self.normalize_dict(first_touch)
+
+		self.attribution['first_touch'] = first_touch
+
+		return self
+
+	def last_touch(self, normalize=True):
+
+		last_touch = defaultdict(int)
+
+		for c in self.channels:
+
+			# total conversions for all paths where the last channel was c
+			last_touch[c] = self.data.loc[self.data['path'].apply(lambda _: _[-1] == c), 'total_conversions'].sum()
+
+		if normalize:
+			last_touch = self.normalize_dict(last_touch)
+
+		self.attribution['last_touch'] = last_touch
 
 		return self
 
@@ -486,4 +549,6 @@ if __name__ == '__main__':
 
 	mta = MTA(allow_loops=True)
 
-	mta.linear(share='proportional')
+	mta.linear(share='proportional').time_decay(count_direction='right').shapley().shao().first_touch().last_touch()
+
+	print(pd.DataFrame.from_dict(mta.attribution))
