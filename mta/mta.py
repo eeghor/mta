@@ -10,8 +10,9 @@ import copy
 import json
 import os
 
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 def show_time(func):
 
@@ -533,16 +534,75 @@ class MTA:
 
 		return self
 
-	def linear_regression(self):
+	def logistic_regression(self, test_size=0.25, ps=0.5, pc=0.5, normalize=True):
 
-		# split into training/test set
+		"""
+		test_size is the proportion of data set to use as the test set
+		r is the ratio of positive (converted) to negative users
+		"""
 
-		X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=36)
+		logistic_regression = defaultdict(float)
+
+		# expand the original data set into a feature matrix
+		lists_ = []
+		flags_ = []
+
+		for i, row in enumerate(self.data.itertuples()):
+
+			for _ in range(row.total_conversions):
+				lists_.append({c: 1 for c in row.path})
+				flags_.append(1)
+
+			for _ in range(row.total_null):
+				lists_.append({c: 1 for c in row.path})
+				flags_.append(0)
+
+		data_ = pd.concat([pd.DataFrame(lists_).fillna(0), pd.DataFrame({'conv': flags_})], axis=1)
+
+		nconv = sum(data_['conv'] == 1)
+		nnull = sum(data_['conv'] == 0)
+
+		n = 1000
+
+		for _ in range(1, n + 1):
+
+			dd = pd.concat([data_[data_['conv'] == 1].sample(frac=0.5), data_[data_['conv'] == 0].sample(n=20000)])
+
+			# randomly sample features (channels) and rows (journeys)
+			if dd.shape[1] > 2:
+				dd = pd.concat([dd.drop('conv', axis=1).sample(frac=pc, axis=1), dd['conv']], axis=1)
+			dd = dd.sample(frac=ps)
+	
+			# split into training/test set
+			X_train, X_test, y_train, y_test = train_test_split(dd.drop('conv', axis=1), dd['conv'], 
+														test_size=test_size, random_state=36, stratify=dd['conv'])
+
+			# fit logistic regression classifier
+			clf = LogisticRegression(random_state=0, solver='lbfgs').fit(X_train, y_train)
+	
+			# predict conversion labels for the test set
+			yh = clf.predict(X_test)
+
+			for c, coef in zip(dd.columns, clf.coef_[0]):
+				logistic_regression[c] += (coef/n if coef > 0 else 0)
+
+		if normalize:
+			logistic_regression = self.normalize_dict(logistic_regression)
+
+		self.attribution['lr'] = logistic_regression
+
+		return self
+
 
 if __name__ == '__main__':
 
 	mta = MTA(allow_loops=False)
 
-	mta.linear(share='proportional').time_decay(count_direction='right').shapley().shao().first_touch().last_touch().markov()
+	mta.linear(share='proportional') \
+			.time_decay(count_direction='right') \
+			.shapley().shao().first_touch() \
+			.last_touch() \
+			.markov() \
+			.logistic_regression()
 
 	print(pd.DataFrame.from_dict(mta.attribution))
