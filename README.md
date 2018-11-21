@@ -21,7 +21,20 @@ In addition, some popular heuristic “models” are included, specifically
 
 The package comes with the same test data set as an R package called [ChannelAttribution](https://cran.r-project.org/web/packages/ChannelAttribution/ChannelAttribution.pdf)  - there are 10,000 rows containing customer journeys across 12 channels: alpha, beta, delta, epsilon, eta, gamma, iota, kappa, lambda, mi, theta and zeta.
 
-![](README/data_snippet.png)
+[!data_snippet](img/data_snippet.png)
+
+These are conversion aggregations by path. Suppose  there’s a path  (customer journey)
+```
+a > b > c
+```
+with **total_conversions** equal to 2 and **total_null** equal to 5. This means that we recorded 2 consumer journeys
+```
+a > b > c > (conversion)
+```
+and 5 customer journeys 
+```
+a > b > c > (null)
+```
 
 ### References
 
