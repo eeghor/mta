@@ -534,14 +534,16 @@ class MTA:
 
 		return self
 
-	def logistic_regression(self, test_size=0.25, ps=0.5, pc=0.5, normalize=True):
+	def logistic_regression(self, test_size=0.25, ps=0.5, pc=0.5, normalize=True, n=2000):
 
 		"""
 		test_size is the proportion of data set to use as the test set
-		r is the ratio of positive (converted) to negative users
+		ps is the proportion of rows to sample
+		pc is the proportion of columns to sample
+		n is the number of iterations
 		"""
 
-		logistic_regression = defaultdict(float)
+		lr = defaultdict(float)
 
 		# expand the original data set into a feature matrix
 		lists_ = []
@@ -557,42 +559,51 @@ class MTA:
 				lists_.append({c: 1 for c in row.path})
 				flags_.append(0)
 
-		data_ = pd.concat([pd.DataFrame(lists_).fillna(0), pd.DataFrame({'conv': flags_})], axis=1)
-
-		nconv = sum(data_['conv'] == 1)
-		nnull = sum(data_['conv'] == 0)
-
-		n = 1000
+		data_ = pd.concat([pd.DataFrame(lists_).fillna(0), 
+								pd.DataFrame({'conv': flags_})], axis=1).sample(frac=1.0)
 
 		for _ in range(1, n + 1):
 
-			dd = pd.concat([data_[data_['conv'] == 1].sample(frac=0.5), data_[data_['conv'] == 0].sample(n=20000)])
+			dd = pd.concat([data_[data_['conv'] == 1].sample(frac=0.5), 
+							data_[data_['conv'] == 0].sample(frac=0.5)])
 
 			# randomly sample features (channels) and rows (journeys)
-			if dd.shape[1] > 2:
-				dd = pd.concat([dd.drop('conv', axis=1).sample(frac=pc, axis=1), dd['conv']], axis=1)
 			dd = dd.sample(frac=ps)
+
+			dd = pd.concat([dd.drop('conv', axis=1).sample(frac=pc, axis=1), dd['conv']], axis=1)
 	
 			# split into training/test set
 			X_train, X_test, y_train, y_test = train_test_split(dd.drop('conv', axis=1), dd['conv'], 
 														test_size=test_size, random_state=36, stratify=dd['conv'])
 
 			# fit logistic regression classifier
-			clf = LogisticRegression(random_state=0, solver='lbfgs').fit(X_train, y_train)
+			clf = LogisticRegression(random_state=32, solver='lbfgs', fit_intercept=False).fit(X_train, y_train)
 	
 			# predict conversion labels for the test set
 			yh = clf.predict(X_test)
 
-			for c, coef in zip(dd.columns, clf.coef_[0]):
-				logistic_regression[c] += (coef/n if coef > 0 else 0)
+			minc = min(clf.coef_[0])
+			maxc = max(clf.coef_[0])
+
+			for c, coef in zip(X_train.columns, [k*k for k in clf.coef_[0]]):
+				lr[c] += coef/n
 
 		if normalize:
-			logistic_regression = self.normalize_dict(logistic_regression)
+			lr = self.normalize_dict(lr)
 
-		self.attribution['lr'] = logistic_regression
+		self.attribution['log_regr'] = lr
 
 		return self
 
+	def show(self):
+
+		"""
+		show simulation results
+		"""
+
+		res = pd.DataFrame.from_dict(mta.attribution)
+
+		print(res)
 
 if __name__ == '__main__':
 
@@ -600,9 +611,10 @@ if __name__ == '__main__':
 
 	mta.linear(share='proportional') \
 			.time_decay(count_direction='right') \
-			.shapley().shao().first_touch() \
+			.shapley() \
+			.shao() \
+			.first_touch() \
 			.last_touch() \
 			.markov() \
 			.logistic_regression()
-
-	print(pd.DataFrame.from_dict(mta.attribution))
+	
