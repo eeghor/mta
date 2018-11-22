@@ -21,7 +21,7 @@ In addition, some popular heuristic “models” are included, specifically
 
 The package comes with the same test data set as an R package called [ChannelAttribution](https://cran.r-project.org/web/packages/ChannelAttribution/ChannelAttribution.pdf)  - there are 10,000 rows containing customer journeys across 12 channels: alpha, beta, delta, epsilon, eta, gamma, iota, kappa, lambda, mi, theta and zeta.
 
-[!data_snippet](img/data_snippet.png)
+[!data_snippet](/img/data_snippet.png)
 
 These are conversion aggregations by path. Suppose  there’s a path  (customer journey)
 ```
@@ -45,3 +45,4 @@ a > b > c > (null)
 * Ren et al (2018) - Learning Multi-touch Conversion Attribution
 with Dual-attention Mechanisms for Online Advertising [pdf](https://arxiv.org/pdf/1808.03737.pdf)
 * Zhang et al (2014)  - Multi-Touch Attribution in Online Advertising with Survival Theory [pdf](http://www0.cs.ucl.ac.uk/staff/w.zhang/rtb-papers/attr-survival.pdf)
+* Geyik et al (2014) - Multi-Touch Attribution Based Budget Allocation in Online Advertising [pdf](https://arxiv.org/pdf/1502.06657.pdf)

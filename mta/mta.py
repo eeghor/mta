@@ -54,6 +54,8 @@ class MTA:
 		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
 		self.removal_effects = defaultdict(float)
 
+		self.tps_by_channel = defaultdict(list)
+
 		self.attribution = defaultdict(lambda: defaultdict(float))
 
 	def show_data(self):
@@ -605,6 +607,30 @@ class MTA:
 
 		print(res)
 
+	def rois(self, attrib, spend, cv):
+
+		"""
+		calculate ROIs as suggested in paper
+		Geyik et al (2014) - Multi-Touch Attribution Based Budget Allocation in Online Advertising
+
+		attrib is a dictionary of attributions per touch point
+		spend is a dictionary of spent dollars per channel 
+		cv is the conversion value (in dollars)
+		"""	
+
+		self.tps_by_channel = {'c1': ['beta', 'iota', 'gamma'], 
+								'c2': ['alpha', 'delta', 'kappa', 'mi'],
+								'c3': ['epsilon', 'lambda', 'eta', 'theta', 'zeta']}
+
+		roi = defaultdict(float)
+
+		for c in self.tps_by_channel:
+			roi[c] = sum([attrib[tp] for tp in self.tps_by_channel[c]])*cv/spend[c]
+
+		return roi
+
+
+
 if __name__ == '__main__':
 
 	mta = MTA(allow_loops=False)
@@ -617,4 +643,6 @@ if __name__ == '__main__':
 			.last_touch() \
 			.markov() \
 			.logistic_regression()
+
+	print(mta.rois(attrib=mta.attribution['shapley'], spend={'c1': 10, 'c2': 20, 'c3': 30}, cv=0.10))
 	
