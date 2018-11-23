@@ -53,10 +53,16 @@ class MTA:
 
 		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
 		self.removal_effects = defaultdict(float)
-
-		self.tps_by_channel = defaultdict(list)
+		# touch points by channel
+		self.tps_by_channel = {'c1': ['beta', 'iota', 'gamma'], 
+								'c2': ['alpha', 'delta', 'kappa', 'mi'],
+								'c3': ['epsilon', 'lambda', 'eta', 'theta', 'zeta']}
 
 		self.attribution = defaultdict(lambda: defaultdict(float))
+
+	def __repr__(self):
+
+		return f'{self.__class__.__name__} with {len(self.channels)} channels: {", ".join(self.channels)}'
 
 	def show_data(self):
 
@@ -618,16 +624,20 @@ class MTA:
 		cv is the conversion value (in dollars)
 		"""	
 
-		self.tps_by_channel = {'c1': ['beta', 'iota', 'gamma'], 
-								'c2': ['alpha', 'delta', 'kappa', 'mi'],
-								'c3': ['epsilon', 'lambda', 'eta', 'theta', 'zeta']}
-
 		roi = defaultdict(float)
 
 		for c in self.tps_by_channel:
 			roi[c] = sum([attrib[tp] for tp in self.tps_by_channel[c]])*cv/spend[c]
 
 		return roi
+
+	def addhazard(self):
+
+		"""
+		TO DO: additive hazard model as in Multi-Touch Attribution in Online Advertising with Survival Theory
+		"""
+
+		pass
 
 
 
@@ -642,7 +652,8 @@ if __name__ == '__main__':
 			.first_touch() \
 			.last_touch() \
 			.markov() \
-			.logistic_regression()
+			.logistic_regression() \
+			.show()
 
-	print(mta.rois(attrib=mta.attribution['shapley'], spend={'c1': 10, 'c2': 20, 'c3': 30}, cv=0.10))
+	# print(mta.rois(attrib=mta.attribution['shapley'], spend={'c1': 10, 'c2': 20, 'c3': 30}, cv=0.10))
 	
