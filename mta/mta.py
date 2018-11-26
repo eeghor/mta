@@ -10,6 +10,8 @@ import copy
 import json
 import os
 
+import arrow
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
@@ -63,6 +65,31 @@ class MTA:
 	def __repr__(self):
 
 		return f'{self.__class__.__name__} with {len(self.channels)} channels: {", ".join(self.channels)}'
+
+	def add_exposure_times(self, dt=None):
+
+		"""
+		generate synthetic exposure times; if dt is specified, the exposures will be dt=1 sec away from one another, otherwise
+		we'll generate time spans randomly
+
+		- the times are of the form 2018-11-26T03:54:26.532091+00:00
+		"""
+		
+		ts = []    # this will be a list of time instant lists one per path 
+
+		if dt:
+
+			_t0 = arrow.utcnow()
+
+			for row in self.data.itertuples():
+				path_ts = [arrow.get(r) for r in arrow.Arrow.range('second', _t0, _t0.shift(seconds=+(len(row.path) - 1)))]
+
+				ts.append(path_ts)
+
+		self.data['exposure_times'] = ts
+
+		return self
+
 
 	def remove_loops(self):
 
@@ -650,6 +677,26 @@ class MTA:
 
 		return p
 
+	def update_coefs(self):
+
+		"""
+		update coefficients beta and omega
+		"""
+
+		beta = omega = defaultdict(float)
+
+		for c in self.channels:
+
+			# we need to look at all converted journeys that went through this channel
+
+			self.data_c = self.data[(self.data['total_conversions'] > 0) & (self.data['path'].apply(lambda x: c in x))]
+
+			# calculate p for each journey
+			for row in self.data_c.itertuples():
+				p = self.contrib_to_conv_journey(beta, omega, row.path, exposure_times)
+
+
+
 	def addhazard(self):
 
 		"""
@@ -664,15 +711,19 @@ if __name__ == '__main__':
 
 	mta = MTA(allow_loops=False)
 
-	mta.linear(share='proportional') \
-			.time_decay(count_direction='right') \
-			.shapley() \
-			.shao() \
-			.first_touch() \
-			.last_touch() \
-			.markov() \
-			.logistic_regression() \
-			.show()
+	# mta.linear(share='proportional') \
+	# 		.time_decay(count_direction='right') \
+	# 		.shapley() \
+	# 		.shao() \
+	# 		.first_touch() \
+	# 		.last_touch() \
+	# 		.markov() \
+	# 		.logistic_regression() \
+	# 		.show()
+
+	mta.add_exposure_times(dt=1)
+
+	print(mta.data.head())
 
 	# print(mta.rois(attrib=mta.attribution['shapley'], spend={'c1': 10, 'c2': 20, 'c3': 30}, cv=0.10))
 	
