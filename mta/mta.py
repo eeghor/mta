@@ -2,7 +2,7 @@ import pandas as pd
 from itertools import chain, tee, combinations
 from functools import reduce
 from operator import mul
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, izip
 import random
 import time
 import numpy as np
@@ -45,6 +45,9 @@ class MTA:
 
 		if not allow_loops:
 			self.remove_loops()
+
+		# we'll work with lists in path and exposure_times from now on
+		self.data[['path', 'exposure_times']] = self.data[['path', 'exposure_times']].applymap(lambda _: [ch.strip() for ch in _.split('>')])
 		
 		# make a sorted list of channel names
 		self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
@@ -669,7 +672,7 @@ class MTA:
 
 		return roi
 
-	def contrib_to_conv_journey(self, beta, omega, path, exposure_times):
+	def pi(self, beta, omega, path, exposure_times):
 
 		"""
 
@@ -677,20 +680,21 @@ class MTA:
 
 		 - beta and omega are dictionaries with coefficient values per channel
 		 - path is a list of states that includes (start) but EXCLUDES (null) or (conversion)
-		 - exposure_times is a dictionary of exposure times by channel, i.e. exposure_times[c] = t means
-		   that a user has been exposed to channel c at time t
+		 - exposure_times is list of exposure times
 		
 		"""
 
+		if len(path) != len(exposure_times):
+			raise ValueError(f'{self.pi.__name__}: number of visited channels not equal to number of exposure times!')
+
 		p = defaultdict(float)    # contributions by channel
 
-		pre_conv_channel = path[-1]
-		conv_time = exposure_times[pre_conv_channel]  # the last timestamp is the conversion time
+		conv_time = exposure_times[path[-1]]  # the last timestamp is the conversion time
 
 		_ = defaultdict()
 
-		for j, c in enumerate(path):
-			_[c] = beta[c]*omega[c]*np.exp(-omega[c*(conv_time - exposure_times[j])])
+		for c, t in izip(path, exposure_times):
+			_[c] = beta[c]*omega[c]*np.exp(-omega[c]*(conv_time - t))
 
 		_tot = sum(_.values())
 
@@ -715,7 +719,7 @@ class MTA:
 
 			# calculate p for each journey
 			for row in self.data_c.itertuples():
-				p = self.contrib_to_conv_journey(beta, omega, row.path, row.exposure_times)
+				p = self.pi(beta, omega, row.path, row.exposure_times)
 
 
 
