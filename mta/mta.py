@@ -717,10 +717,11 @@ class MTA:
 		"""
 		update coefficients beta and omega
 		"""
+		print(f'running {self.update_coefs.__name__}...')
 
 		it = 0 
 
-		while it <= max_it:
+		while it < max_it:
 
 			# beta and omega nominators and denominators by channel
 			b_nomin = defaultdict(float)
@@ -754,53 +755,72 @@ class MTA:
 	
 			# now that we gone through every user, update coefficients for every channel
 			
-			beta_old = self.beta
-			omega_old = self.omega
+			beta_old = copy.deepcopy(self.beta)
+			omega_old = copy.deepcopy(self.omega)
 
 			for c in self.channels:
 
-				if b_denom[c] > 1e-06:
+				if b_denom[c] > 1e-05:
 					self.beta[c] = b_nomin[c]/b_denom[c] 
-				if o_denom[c] > 1e-06:
+				if o_denom[c] > 1e-05:
 					self.omega[c] = o_nomin[c]/o_denom[c]
 
-			print(self.beta)
-
-			if all([abs(self.beta[c] - beta_old[c]) < delta for c in self.channels]):
-				print(f'beta converged after {it} iterations')
-
-			if all([abs(self.omega[c] - omega_old[c]) < delta for c in self.channels]):
-				print(f'omega converged after {it} iterations')
+			if all([abs(self.beta[c] - beta_old[c]) < delta for c in self.channels]) and \
+					all([abs(self.omega[c] - omega_old[c]) < delta for c in self.channels]):
+				print(f'converged after {it} iterations')
+				break
 
 			it += 1
 
+			if it == max_it:
+				print(f'did not converge after {it} iterations!')
+
+		return self
 
 
-	def addhazard(self):
+	def additive_hazard(self, normalize=True):
 
 		"""
-		TO DO: additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
+		additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
 		"""
 
-		pass
+		additive_hazard = defaultdict(float)
 
+		self.update_coefs(max_it=50, delta=1e-5)
 
+		# time window: take the max time instant across all journeys that converged
+
+		conv_times = {arrow.get(t) for t in chain(self.data[self.data['total_conversions'] > 0]['exposure_times'].apply(lambda x: x[-1]))}
+
+		start_times = {arrow.get(t) for t in chain(self.data[self.data['total_conversions'] > 0]['exposure_times'].apply(lambda x: x[0]))}
+
+		T = (max(conv_times) - min(start_times)).seconds
+
+		print(f'time window: {T} seconds')
+
+		for c in self.channels:
+			additive_hazard[c] = 1.0 - np.exp(-self.beta[c]*(1.0 - np.exp(-self.omega[c]*T)))
+
+		if normalize:
+			additive_hazard = self.normalize_dict(additive_hazard)
+
+		self.attribution['additive_hazard'] = additive_hazard
+
+		return self
 
 if __name__ == '__main__':
 
 	mta = MTA(allow_loops=False)
 
-	# mta.linear(share='proportional') \
-	# 		.time_decay(count_direction='right') \
-	# 		.shapley() \
-	# 		.shao() \
-	# 		.first_touch() \
-	# 		.last_touch() \
-	# 		.markov() \
-	# 		.logistic_regression() \
-	# 		.show()
+	mta.linear(share='proportional') \
+			.additive_hazard() \
+			.show()
+			# .time_decay(count_direction='right') \
+			# .shapley() \
+			# .shao() \
+			# .first_touch() \
+			# .last_touch() \
+			# .markov() \
+			# .logistic_regression() \
 
-	mta.update_coefs()
-
-	# print(mta.rois(attrib=mta.attribution['shapley'], spend={'c1': 10, 'c2': 20, 'c3': 30}, cv=0.10))
 	
