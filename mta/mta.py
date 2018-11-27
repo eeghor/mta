@@ -2,7 +2,7 @@ import pandas as pd
 from itertools import chain, tee, combinations
 from functools import reduce
 from operator import mul
-from collections import defaultdict, Counter, izip
+from collections import defaultdict, Counter
 import random
 import time
 import numpy as np
@@ -62,6 +62,10 @@ class MTA:
 		self.tps_by_channel = {'c1': ['beta', 'iota', 'gamma'], 
 								'c2': ['alpha', 'delta', 'kappa', 'mi'],
 								'c3': ['epsilon', 'lambda', 'eta', 'theta', 'zeta']}
+
+		# initialize like in the paper
+		self.beta = {c: random.uniform(0,1) for c in self.channels}
+		self.omega = {c: random.uniform(0,10) for c in self.channels}
 
 		self.attribution = defaultdict(lambda: defaultdict(float))
 
@@ -672,54 +676,103 @@ class MTA:
 
 		return roi
 
-	def pi(self, beta, omega, path, exposure_times):
+	def pi(self, path, exposure_times, conv_flag):
 
 		"""
 
 		calculate contribution of channel i to conversion of journey (user) u - (p_i^u) in the paper
 
-		 - beta and omega are dictionaries with coefficient values per channel
 		 - path is a list of states that includes (start) but EXCLUDES (null) or (conversion)
 		 - exposure_times is list of exposure times
 		
 		"""
 
+		p = defaultdict(float)    # contributions by channel
+
+		if not conv_flag:
+
+			for c in path:
+				p[c] = 0
+			return p
+
 		if len(path) != len(exposure_times):
 			raise ValueError(f'{self.pi.__name__}: number of visited channels not equal to number of exposure times!')
 
-		p = defaultdict(float)    # contributions by channel
-
-		conv_time = exposure_times[path[-1]]  # the last timestamp is the conversion time
+		conv_time = exposure_times[-1]  # the last timestamp is the conversion time
 
 		_ = defaultdict()
 
-		for c, t in izip(path, exposure_times):
-			_[c] = beta[c]*omega[c]*np.exp(-omega[c]*(conv_time - t))
+		for c, t in zip(path, exposure_times):
 
-		_tot = sum(_.values())
+			dt = (arrow.get(conv_time) - arrow.get(t)).seconds
+			_[c] = self.beta[c]*self.omega[c]*np.exp(-self.omega[c]*dt)
 
 		for c in path:
-			p[c] = _[c]/_tot
+			p[c] = _[c]/sum(_.values())
 
 		return p
 
-	def update_coefs(self):
+	def update_coefs(self, max_it=50, delta=1e-6):
 
 		"""
 		update coefficients beta and omega
 		"""
 
-		beta = omega = defaultdict(float)
+		it = 0 
 
-		for c in self.channels:
+		while it <= max_it:
 
-			# we need to look at all converted journeys that went through this channel
+			# beta and omega nominators and denominators by channel
+			b_nomin = defaultdict(float)
+			b_denom = defaultdict(float)
+			o_nomin = defaultdict(float)
+			o_denom = defaultdict(float)
+	
+			for row in self.data.itertuples():
 
-			self.data_c = self.data[(self.data['total_conversions'] > 0) & (self.data['path'].apply(lambda x: c in x))]
+				# p for users who didn't convert is just zero
+				if not row.total_conversions:
+					pass
+				else:
+					# this is using the current values for beta and omega;
+					# contributions of channels on the path to conversion of this user
+					p = self.pi(row.path, row.exposure_times, row.total_conversions)
+				
+				for c in row.path:
 
-			# calculate p for each journey
-			for row in self.data_c.itertuples():
-				p = self.pi(beta, omega, row.path, row.exposure_times)
+					b_nomin[c] += sum(p.values())
+					o_nomin[c] += sum(p.values())
+	
+					t_exp_c = row.exposure_times[row.path.index(c)]
+	
+					# time since exposure to last time instant (conversion time if there was a conversion)
+					dt = (arrow.get(row.exposure_times[-1]) - arrow.get(t_exp_c)).seconds
+	
+					b_denom[c] += (1.0 - np.exp(-self.omega[c]*dt))
+	
+					o_denom[c] += (p.get(c, 0) + self.beta[c]*np.exp(-self.omega[c]*dt))*dt
+	
+			# now that we gone through every user, update coefficients for every channel
+			
+			beta_old = self.beta
+			omega_old = self.omega
+
+			for c in self.channels:
+
+				if b_denom[c] > 1e-06:
+					self.beta[c] = b_nomin[c]/b_denom[c] 
+				if o_denom[c] > 1e-06:
+					self.omega[c] = o_nomin[c]/o_denom[c]
+
+			print(self.beta)
+
+			if all([abs(self.beta[c] - beta_old[c]) < delta for c in self.channels]):
+				print(f'beta converged after {it} iterations')
+
+			if all([abs(self.omega[c] - omega_old[c]) < delta for c in self.channels]):
+				print(f'omega converged after {it} iterations')
+
+			it += 1
 
 
 
@@ -747,7 +800,7 @@ if __name__ == '__main__':
 	# 		.logistic_regression() \
 	# 		.show()
 
-	print(mta.data.head())
+	mta.update_coefs()
 
 	# print(mta.rois(attrib=mta.attribution['shapley'], spend={'c1': 10, 'c2': 20, 'c3': 30}, cv=0.10))
 	
