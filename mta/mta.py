@@ -687,7 +687,7 @@ class MTA:
 		
 		"""
 
-		p = {c: 0 for c in self.channels}    # contributions by channel
+		p = {c: 0 for c in path}    # contributions by channel
 
 		# all contributions are zero if no conversion
 		if not conv_flag:
@@ -700,12 +700,11 @@ class MTA:
 
 		_ = defaultdict(float)
 
-		for c, t in zip(path, exposure_times):
+		for c, dt in zip(path, [(arrow.get(conv_time) - arrow.get(t)).seconds for t in exposure_times]):
 
-			dt = (arrow.get(conv_time) - arrow.get(t)).seconds
 			_[c] += self.beta[c]*self.omega[c]*np.exp(-self.omega[c]*dt)
 
-		for c in path:
+		for c in _:
 			p[c] = _[c]/sum(_.values())
 
 		return p
@@ -713,7 +712,8 @@ class MTA:
 	def update_coefs(self, max_it=50, delta=1e-6):
 
 		"""
-		update coefficients beta and omega
+		update coefficients beta and omega; beta is the strength of the effect triggered by advertising channel 
+		while omega is the speed of the time-decaying effect
 		"""
 		print(f'running {self.update_coefs.__name__}...')
 
@@ -726,7 +726,12 @@ class MTA:
 			b_denom = defaultdict(float)
 			o_nomin = defaultdict(float)
 			o_denom = defaultdict(float)
-	
+		
+			# tot_contr = 0
+
+			beta_old = copy.deepcopy(self.beta)
+			omega_old = copy.deepcopy(self.omega)
+
 			for row in self.data.itertuples():
 
 				# this is using the current values for beta and omega;
@@ -742,9 +747,6 @@ class MTA:
 
 					c = r.pop()
 					t_exp_c = e.pop()
-
-					b_nomin[c] += sum(p.values())  # total contribution by channels on this path
-					o_nomin[c] += sum(p.values())
 	
 					# time since exposure to last time instant (conversion time if there was a conversion)
 					dt = (arrow.get(t_conv) - arrow.get(t_exp_c)).seconds
@@ -752,11 +754,11 @@ class MTA:
 					b_denom[c] += (1.0 - np.exp(-self.omega[c]*dt))
 	
 					o_denom[c] += (p[c] + self.beta[c]*np.exp(-self.omega[c]*dt))*dt
+
+					b_nomin[c] += p[c]  # total contribution by channels on this path
+					o_nomin[c] += p[c]
 	
 			# now that we gone through every user, update coefficients for every channel
-			
-			beta_old = copy.deepcopy(self.beta)
-			omega_old = copy.deepcopy(self.omega)
 
 			for c in self.channels:
  
