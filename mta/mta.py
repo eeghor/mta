@@ -687,12 +687,10 @@ class MTA:
 		
 		"""
 
-		p = defaultdict(float)    # contributions by channel
+		p = {c: 0 for c in self.channels}    # contributions by channel
 
+		# all contributions are zero if no conversion
 		if not conv_flag:
-
-			for c in path:
-				p[c] = 0
 			return p
 
 		if len(path) != len(exposure_times):
@@ -700,12 +698,12 @@ class MTA:
 
 		conv_time = exposure_times[-1]  # the last timestamp is the conversion time
 
-		_ = defaultdict()
+		_ = defaultdict(float)
 
 		for c, t in zip(path, exposure_times):
 
 			dt = (arrow.get(conv_time) - arrow.get(t)).seconds
-			_[c] = self.beta[c]*self.omega[c]*np.exp(-self.omega[c]*dt)
+			_[c] += self.beta[c]*self.omega[c]*np.exp(-self.omega[c]*dt)
 
 		for c in path:
 			p[c] = _[c]/sum(_.values())
@@ -731,27 +729,29 @@ class MTA:
 	
 			for row in self.data.itertuples():
 
-				# p for users who didn't convert is just zero
-				if not row.total_conversions:
-					pass
-				else:
-					# this is using the current values for beta and omega;
-					# contributions of channels on the path to conversion of this user
-					p = self.pi(row.path, row.exposure_times, row.total_conversions)
-				
-				for c in row.path:
+				# this is using the current values for beta and omega;
+				# contributions of channels on the path to conversion of this user
+				p = self.pi(row.path, row.exposure_times, row.total_conversions)
 
-					b_nomin[c] += sum(p.values())
+				t_conv = row.exposure_times[-1] 
+
+				r = copy.deepcopy(row.path)
+				e = copy.deepcopy(row.exposure_times)
+
+				while r:
+
+					c = r.pop()
+					t_exp_c = e.pop()
+
+					b_nomin[c] += sum(p.values())  # total contribution by channels on this path
 					o_nomin[c] += sum(p.values())
 	
-					t_exp_c = row.exposure_times[row.path.index(c)]
-	
 					# time since exposure to last time instant (conversion time if there was a conversion)
-					dt = (arrow.get(row.exposure_times[-1]) - arrow.get(t_exp_c)).seconds
+					dt = (arrow.get(t_conv) - arrow.get(t_exp_c)).seconds
 	
 					b_denom[c] += (1.0 - np.exp(-self.omega[c]*dt))
 	
-					o_denom[c] += (p.get(c, 0) + self.beta[c]*np.exp(-self.omega[c]*dt))*dt
+					o_denom[c] += (p[c] + self.beta[c]*np.exp(-self.omega[c]*dt))*dt
 	
 			# now that we gone through every user, update coefficients for every channel
 			
@@ -759,16 +759,17 @@ class MTA:
 			omega_old = copy.deepcopy(self.omega)
 
 			for c in self.channels:
+ 
+				if (b_denom[c] > 1e-06) and (o_denom[c] > 1e-06):
 
-				if b_denom[c] > 1e-05:
 					self.beta[c] = b_nomin[c]/b_denom[c] 
-				if o_denom[c] > 1e-05:
 					self.omega[c] = o_nomin[c]/o_denom[c]
 
 			if all([abs(self.beta[c] - beta_old[c]) < delta for c in self.channels]) and \
 					all([abs(self.omega[c] - omega_old[c]) < delta for c in self.channels]):
 				print(f'converged after {it} iterations')
-				break
+
+				return self
 
 			it += 1
 
@@ -784,9 +785,7 @@ class MTA:
 		additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
 		"""
 
-		additive_hazard = defaultdict(float)
-
-		self.update_coefs(max_it=50, delta=1e-5)
+		self.update_coefs(max_it=50, delta=1e-6)
 
 		# time window: take the max time instant across all journeys that converged
 
@@ -798,8 +797,7 @@ class MTA:
 
 		print(f'time window: {T} seconds')
 
-		for c in self.channels:
-			additive_hazard[c] = 1.0 - np.exp(-self.beta[c]*(1.0 - np.exp(-self.omega[c]*T)))
+		additive_hazard = {c: 1.0 - np.exp(-self.beta[c]*(1.0 - np.exp(-self.omega[c]*T))) for c in self.channels}
 
 		if normalize:
 			additive_hazard = self.normalize_dict(additive_hazard)
