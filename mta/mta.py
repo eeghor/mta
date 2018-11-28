@@ -640,7 +640,7 @@ class MTA:
 		if normalize:
 			lr = self.normalize_dict(lr)
 
-		self.attribution['log_regr'] = lr
+		self.attribution['lr'] = lr
 
 		return self
 
@@ -730,8 +730,7 @@ class MTA:
 				beta_den[c] += (1.0 - np.exp(-omega[c]*dt))
 				omega_den[c] += (p[c]*dt + beta[c]*dt*np.exp(-omega[c]*dt))
 
-				if row.total_conversions:
-					beta_num[c] += p[c]
+				beta_num[c] += p[c]
 	
 		# now that we gone through every user, update coefficients for every channel
 
@@ -742,7 +741,7 @@ class MTA:
 
 		for c in self.channels:
 			
-			beta_num[c] = max(beta_num[c], 1e-6)
+			beta_num[c] = (beta_num[c] > 1e-6)*beta_num[c]
 			beta_den[c] = max(beta_den[c], 1e-6)
 			omega_den[c] = max(omega_den[c], 1e-6)
 
@@ -762,7 +761,7 @@ class MTA:
 		"""
 
 		beta = {c: random.uniform(0.01,1) for c in self.channels}
-		omega = {c: random.uniform(0.01,3) for c in self.channels}
+		omega = {c: random.uniform(0.01,1) for c in self.channels}
 
 		for _ in range(epochs):
 
@@ -773,6 +772,8 @@ class MTA:
 			if h == 2*len(self.channels):
 				print(f'converged after {_ + 1} iterations')
 				break
+			else:
+				print(h)
 
 		# time window: take the max time instant across all journeys that converged
 
@@ -788,7 +789,7 @@ class MTA:
 		if normalize:
 			additive_hazard = self.normalize_dict(additive_hazard)
 
-		self.attribution['additive_hazard'] = additive_hazard
+		self.attribution['adh'] = additive_hazard
 
 		return self
 
@@ -797,14 +798,14 @@ if __name__ == '__main__':
 	mta = MTA(allow_loops=False)
 
 	mta.linear(share='proportional') \
+			.time_decay(count_direction='right') \
+			.shapley() \
+			.shao() \
+			.first_touch() \
+			.last_touch() \
+			.markov() \
+			.logistic_regression() \
 			.additive_hazard() \
 			.show()
-			# .time_decay(count_direction='right') \
-			# .shapley() \
-			# .shao() \
-			# .first_touch() \
-			# .last_touch() \
-			# .markov() \
-			# .logistic_regression() \
 
 	

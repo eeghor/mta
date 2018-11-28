@@ -9,6 +9,7 @@ This package contains implementations the following Multi-Touch Attribution mode
 * Markov
 * So-called Simple Probabilistic Model by Shao and Li
 * Bagged Logistic Regression by Shao and Li
+* Additive Hazard (survival)
 
 In addition, some popular heuristic “models” are included, specifically
 
