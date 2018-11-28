@@ -63,10 +63,6 @@ class MTA:
 								'c2': ['alpha', 'delta', 'kappa', 'mi'],
 								'c3': ['epsilon', 'lambda', 'eta', 'theta', 'zeta']}
 
-		# initialize like in the paper
-		self.beta = {c: random.uniform(0,1) for c in self.channels}
-		self.omega = {c: random.uniform(0,10) for c in self.channels}
-
 		self.attribution = defaultdict(lambda: defaultdict(float))
 
 	def __repr__(self):
@@ -676,7 +672,7 @@ class MTA:
 
 		return roi
 
-	def pi(self, path, exposure_times, conv_flag):
+	def pi(self, path, exposure_times, conv_flag, beta_by_channel, omega_by_channel):
 
 		"""
 
@@ -693,113 +689,101 @@ class MTA:
 		if not conv_flag:
 			return p
 
-		if len(path) != len(exposure_times):
-			raise ValueError(f'{self.pi.__name__}: number of visited channels not equal to number of exposure times!')
-
-		conv_time = exposure_times[-1]  # the last timestamp is the conversion time
+		dts = [(arrow.get(exposure_times[-1]) - arrow.get(t)).seconds for t in exposure_times]
 
 		_ = defaultdict(float)
 
-		for c, dt in zip(path, [(arrow.get(conv_time) - arrow.get(t)).seconds for t in exposure_times]):
-
-			_[c] += self.beta[c]*self.omega[c]*np.exp(-self.omega[c]*dt)
+		for c, dt in zip(path, dts):
+			_[c] += beta_by_channel[c]*omega_by_channel[c]*np.exp(-omega_by_channel[c]*dt)
 
 		for c in _:
 			p[c] = _[c]/sum(_.values())
 
 		return p
 
-	def update_coefs(self, max_it=50, delta=1e-6):
+	def update_coefs(self, beta, omega):
 
 		"""
-		update coefficients beta and omega; beta is the strength of the effect triggered by advertising channel 
-		while omega is the speed of the time-decaying effect
+		return updated beta and omega
 		"""
-		print(f'running {self.update_coefs.__name__}...')
 
-		it = 0 
+		delta = 1e-3
 
-		while it < max_it:
+		beta_num = defaultdict(float)
+		beta_den = defaultdict(float)
+		omega_den = defaultdict(float)
 
-			# beta and omega nominators and denominators by channel
-			b_nomin = defaultdict(float)
-			b_denom = defaultdict(float)
-			o_nomin = defaultdict(float)
-			o_denom = defaultdict(float)
-		
-			# tot_contr = 0
+		for u, row in enumerate(self.data.itertuples()):
 
-			beta_old = copy.deepcopy(self.beta)
-			omega_old = copy.deepcopy(self.omega)
+			p = self.pi(row.path, row.exposure_times, row.total_conversions, beta, omega)
 
-			for row in self.data.itertuples():
+			r = copy.deepcopy(row.path)
 
-				# this is using the current values for beta and omega;
-				# contributions of channels on the path to conversion of this user
-				p = self.pi(row.path, row.exposure_times, row.total_conversions)
+			dts = [(arrow.get(row.exposure_times[-1]) - arrow.get(t)).seconds for t in row.exposure_times]
 
-				t_conv = row.exposure_times[-1] 
+			while r:
 
-				r = copy.deepcopy(row.path)
-				e = copy.deepcopy(row.exposure_times)
+				# pick channels starting from the last one
+				c = r.pop()
+				dt = dts.pop()
 
-				while r:
+				beta_den[c] += (1.0 - np.exp(-omega[c]*dt))
+				omega_den[c] += (p[c]*dt + beta[c]*dt*np.exp(-omega[c]*dt))
 
-					c = r.pop()
-					t_exp_c = e.pop()
+				if row.total_conversions:
+					beta_num[c] += p[c]
 	
-					# time since exposure to last time instant (conversion time if there was a conversion)
-					dt = (arrow.get(t_conv) - arrow.get(t_exp_c)).seconds
-	
-					b_denom[c] += (1.0 - np.exp(-self.omega[c]*dt))
-	
-					o_denom[c] += (p[c] + self.beta[c]*np.exp(-self.omega[c]*dt))*dt
+		# now that we gone through every user, update coefficients for every channel
 
-					b_nomin[c] += p[c]  # total contribution by channels on this path
-					o_nomin[c] += p[c]
-	
-			# now that we gone through every user, update coefficients for every channel
+		beta0 = copy.deepcopy(beta)
+		omega0 = copy.deepcopy(omega)
 
-			for c in self.channels:
- 
-				if (b_denom[c] > 1e-06) and (o_denom[c] > 1e-06):
+		df = []
 
-					self.beta[c] = b_nomin[c]/b_denom[c] 
-					self.omega[c] = o_nomin[c]/o_denom[c]
+		for c in self.channels:
+			
+			beta_num[c] = max(beta_num[c], 1e-6)
+			beta_den[c] = max(beta_den[c], 1e-6)
+			omega_den[c] = max(omega_den[c], 1e-6)
 
-			if all([abs(self.beta[c] - beta_old[c]) < delta for c in self.channels]) and \
-					all([abs(self.omega[c] - omega_old[c]) < delta for c in self.channels]):
-				print(f'converged after {it} iterations')
+			beta[c] = beta_num[c]/beta_den[c]
+			omega[c] = beta_num[c]/omega_den[c]
 
-				return self
+			df.append(abs(beta[c] - beta0[c]) < delta)
+			df.append(abs(omega[c] - omega0[c]) < delta)
 
-			it += 1
-
-			if it == max_it:
-				print(f'did not converge after {it} iterations!')
-
-		return self
+		return (beta, omega, sum(df))
 
 
-	def additive_hazard(self, normalize=True):
+	def additive_hazard(self, epochs=200, normalize=True):
 
 		"""
 		additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
 		"""
 
-		self.update_coefs(max_it=50, delta=1e-6)
+		beta = {c: random.uniform(0.01,1) for c in self.channels}
+		omega = {c: random.uniform(0.01,3) for c in self.channels}
+
+		for _ in range(epochs):
+
+			print(f'epoch: {_+1}/{epochs}...')
+
+			beta, omega, h = self.update_coefs(beta, omega)
+
+			if h == 2*len(self.channels):
+				print(f'converged after {_ + 1} iterations')
+				break
 
 		# time window: take the max time instant across all journeys that converged
 
-		conv_times = {arrow.get(t) for t in chain(self.data[self.data['total_conversions'] > 0]['exposure_times'].apply(lambda x: x[-1]))}
+		additive_hazard = defaultdict(float)
 
-		start_times = {arrow.get(t) for t in chain(self.data[self.data['total_conversions'] > 0]['exposure_times'].apply(lambda x: x[0]))}
+		for u, row in enumerate(self.data.itertuples()):
 
-		T = (max(conv_times) - min(start_times)).seconds
+			p = self.pi(row.path, row.exposure_times, row.total_conversions, beta, omega)
 
-		print(f'time window: {T} seconds')
-
-		additive_hazard = {c: 1.0 - np.exp(-self.beta[c]*(1.0 - np.exp(-self.omega[c]*T))) for c in self.channels}
+			for c in p:
+				additive_hazard[c] += p[c]
 
 		if normalize:
 			additive_hazard = self.normalize_dict(additive_hazard)
