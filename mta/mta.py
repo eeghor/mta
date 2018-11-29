@@ -34,29 +34,35 @@ def show_time(func):
 
 class MTA:
 
-	def __init__(self, data='data.csv.gz', allow_loops=False):
+	def __init__(self, data='data.csv.gz', allow_loops=False, add_timepoints=True, sep=' > '):
 
 		self.data = pd.read_csv(os.path.join('data', data))
+		self.sep = sep
+		self.NULL = '(null)'
+		self.START = '(start)'
+		self.CONV = '(conversion)'
 
 		if not (set(self.data.columns) <= set('path total_conversions total_conversion_value total_null exposure_times'.split())):
 			raise ValueError(f'wrong column names in {data}!')
-
-		self.add_exposure_times(1)
+		
+		if add_timepoints:
+			self.add_exposure_times(1)
 
 		if not allow_loops:
 			self.remove_loops()
 
 		# we'll work with lists in path and exposure_times from now on
-		self.data[['path', 'exposure_times']] = self.data[['path', 'exposure_times']].applymap(lambda _: [ch.strip() for ch in _.split('>')])
+		self.data[['path', 'exposure_times']] = self.data[['path', 'exposure_times']].applymap(lambda _: [ch.strip() for ch in _.split(self.sep.strip())])
 		
 		# make a sorted list of channel names
 		self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
 		# add some extra channels
-		self.channels_ext = ['(start)'] + self.channels + ['(conversion)', '(null)']
+		self.channels_ext = [self.START] + self.channels + [self.CONV, self.NULL]
 		# make dictionary mapping a channel name to it's index
 		self.c2i = {c: i for i, c in enumerate(self.channels_ext)}
 
 		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
+
 		self.removal_effects = defaultdict(float)
 		# touch points by channel
 		self.tps_by_channel = {'c1': ['beta', 'iota', 'gamma'], 
@@ -92,7 +98,7 @@ class MTA:
 
 			self.data['path'].str.split('>') \
 				.apply(lambda _: [ch.strip() for ch in _]) \
-				.apply(lambda lst: ts.append(' > '.join([r.format('YYYY-MM-DD HH:mm:ss') 
+				.apply(lambda lst: ts.append(self.sep.join([r.format('YYYY-MM-DD HH:mm:ss') 
 									for r in arrow.Arrow.range('second', _t0, _t0.shift(seconds=+(len(lst) - 1)))])))
 
 		self.data['exposure_times'] = ts
@@ -129,8 +135,8 @@ class MTA:
 						clean_path.append(p)
 						clean_exposure_times.append(row.exposure_times[i-1])
 
-			cpath.append(' > '.join(clean_path))
-			cexposure.append(' > '.join(clean_exposure_times))
+			cpath.append(self.sep.join(clean_path))
+			cexposure.append(self.sep.join(clean_exposure_times))
 
 		self.data_ = pd.concat([pd.DataFrame({'path': cpath}), 
 								self.data[[c for c in self.data.columns if c not in 'path exposure_times'.split()]],
@@ -305,11 +311,11 @@ class MTA:
 
 		for row in self.data.itertuples():
 
-			for ch_pair in self.pairs(['(start)'] + row.path):
+			for ch_pair in self.pairs([self.START] + row.path):
 				c[ch_pair] += (row.total_conversions + row.total_null)
 
 			c[(row.path[-1], '(null)')] += row.total_null
-			c[(row.path[-1], '(conversion)')] += row.total_conversions
+			c[(row.path[-1], self.CONV)] += row.total_conversions
 
 		return c
 
@@ -325,10 +331,10 @@ class MTA:
 		if all([len(t) == 1, t[0] in '(start) (null) (conversion)'.split()]):
 			raise Exception(f'wrong transition {t}!')
 
-		if (len(t) > 1) and (t[-1] == '(start)'): 
+		if (len(t) > 1) and (t[-1] == self.START): 
 			raise Exception(f'wrong transition {t}!')
 
-		if (len(t) > 1) and (t[0] == '(start)'):
+		if (len(t) > 1) and (t[0] == self.START):
 			return (t[0],) + tuple(sorted(list(t[1:])))
 
 		if (len(t) > 1) and (t[-1] in '(null) (conversion)'.split()):
@@ -338,7 +344,12 @@ class MTA:
 
 	def trans_matrix(self):
 
-		trans_probs = defaultdict(float)
+		"""
+		calculate transition matrix which will actually be a dictionary mapping 
+		a pair (a, b) to the probability of moving from a to b, e.g. T[(a, b)] = 0.5
+		"""
+
+		tr = defaultdict(float)
 
 		outs = defaultdict(int)
 
@@ -351,17 +362,23 @@ class MTA:
 
 		for pair in pair_counts:
 
-			trans_probs[pair] = pair_counts[pair]/outs[pair[0]]
+			tr[pair] = pair_counts[pair]/outs[pair[0]]
 
-		return trans_probs
+		return tr
 
 	@show_time
 	def simulate_path(self, n=int(1e6), drop_state=None):
 
-		conv_or_null = defaultdict(int)
+		"""
+		generate n random user journeys and see where these users end up - converted or not;
+		drop_state is a channel to exclude if specified
+		"""
+
+		outcome_counts = defaultdict(int)
+
 		channel_idxs = list(self.c2i.values())
 
-		null_idx = self.c2i['(null)']
+		null_idx = self.c2i[self.NULL]
 
 		m = copy.copy(self.m)
 
@@ -377,23 +394,23 @@ class MTA:
 
 		for _ in range(n):
 
-			init_idx = self.c2i['(start)']
+			init_idx = self.c2i[self.START]
 			final_state = None
 
 			while not final_state:
 
 				next_idx = np.random.choice(channel_idxs, p=m[init_idx], replace=False)
 
-				if next_idx == self.c2i['(conversion)']:
-					conv_or_null['(conversion)'] += 1
+				if next_idx == self.c2i[self.CONV]:
+					outcome_counts[self.CONV] += 1
 					final_state = True
 				elif next_idx in {null_idx, drop_idx}:
-					conv_or_null['(null)'] += 1
+					outcome_counts[self.NULL] += 1
 					final_state = True
 				else:
 					init_idx = next_idx
 
-		return conv_or_null
+		return outcome_counts
 
 	def calculate_removal_effects(self, normalize=True):
 
@@ -408,8 +425,8 @@ class MTA:
 			print(f'{i}/{len(self.channels)}: removed channel {ch}...')
 
 			cvs[ch] = self.simulate_path(drop_state=ch)
-			self.removal_effects[ch] = round((cvs['no_removals']['(conversion)'] - 
-												cvs[ch]['(conversion)'])/cvs['no_removals']['(conversion)'], 6)
+			self.removal_effects[ch] = round((cvs['no_removals'][self.CONV] - 
+												cvs[ch][self.CONV])/cvs['no_removals'][self.CONV], 6)
 
 		if normalize:
 			self.removal_effects = self.normalize_dict(self.removal_effects)
@@ -426,7 +443,7 @@ class MTA:
 
 			pr_this_path = []
 
-			for t in self.pairs(['(start)'] + row.path + ['(conversion)']):
+			for t in self.pairs([self.START] + row.path + [self.CONV]):
 
 				pr_this_path.append(trans_mat.get(t, 0))
 
@@ -439,12 +456,19 @@ class MTA:
 
 		markov = defaultdict(float)
 
+		# calculate the transition matrix
 		tr = self.trans_matrix()
 
-		p_conv = self.prob_convert(trans_mat=tr)
+		if not sim:
+			
+			p_conv = self.prob_convert(trans_mat=tr)
 
-		for c in self.channels:
-			markov[c] = (p_conv - self.prob_convert(trans_mat=tr, drop=c))/p_conv
+			for c in self.channels:
+				markov[c] = (p_conv - self.prob_convert(trans_mat=tr, drop=c))/p_conv
+		else:
+
+			# get conversion counts when all chennels are in place
+			outcomes_full = simulate_path(drop_state=None)
 
 		if normalize:
 			markov = self.normalize_dict(markov)
@@ -474,11 +498,11 @@ class MTA:
 					
 					t = self.ordered_tuple(ch)
 
-					r[t]['(conversion)'] += row.total_conversions
-					r[t]['(null)'] += row.total_null
+					r[t][self.CONV] += row.total_conversions
+					r[t][self.NULL] += row.total_null
 
 		for _ in r:
-			r[_]['conv_prob'] = r[_]['(conversion)']/(r[_]['(conversion)'] + r[_]['(null)'])
+			r[_]['conv_prob'] = r[_][self.CONV]/(r[_][self.CONV] + r[_][self.NULL])
 
 		# calculate channel contributions
 
@@ -529,8 +553,8 @@ class MTA:
 
 					tup_ = self.ordered_tuple(tup)
 
-					self.cc[tup_]['(conversion)'] += convs
-					self.cc[tup_]['(null)'] += nulls
+					self.cc[tup_][self.CONV] += convs
+					self.cc[tup_][self.NULL] += nulls
 
 		return self
 
@@ -548,7 +572,7 @@ class MTA:
 		for n in range(1, s+1):
 			for tup in combinations(coalition, n):
 				tup_ = self.ordered_tuple(tup)
-				total_convs += self.cc[tup_]['(conversion)']
+				total_convs += self.cc[tup_][self.CONV]
 
 		return total_convs
 
@@ -742,10 +766,12 @@ class MTA:
 		for c in self.channels:
 			
 			beta_num[c] = (beta_num[c] > 1e-6)*beta_num[c]
-			beta_den[c] = max(beta_den[c], 1e-6)
+			beta_den[c] = (beta_den[c] > 1e-6)*beta_den[c]
 			omega_den[c] = max(omega_den[c], 1e-6)
 
-			beta[c] = beta_num[c]/beta_den[c]
+			if beta_den[c]:
+				beta[c] = beta_num[c]/beta_den[c]
+
 			omega[c] = beta_num[c]/omega_den[c]
 
 			df.append(abs(beta[c] - beta0[c]) < delta)
@@ -754,14 +780,14 @@ class MTA:
 		return (beta, omega, sum(df))
 
 
-	def additive_hazard(self, epochs=200, normalize=True):
+	def additive_hazard(self, epochs=100, normalize=True):
 
 		"""
 		additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
 		"""
 
-		beta = {c: random.uniform(0.01,1) for c in self.channels}
-		omega = {c: random.uniform(0.01,1) for c in self.channels}
+		beta = {c: random.uniform(0.01,2) for c in self.channels}
+		omega = {c: random.uniform(0.01,2) for c in self.channels}
 
 		for _ in range(epochs):
 
