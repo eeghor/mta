@@ -1,6 +1,6 @@
 import pandas as pd
 from itertools import chain, tee, combinations
-from functools import reduce
+from functools import reduce, wraps
 from operator import mul
 from collections import defaultdict, Counter
 import random
@@ -22,11 +22,26 @@ def show_time(func):
 	timer decorator
 	"""
 
+	@wraps(func)
 	def wrapper(*args, **kwargs):
 
 		t0 = time.time()
+
+		print(f'running {func.__name__}.. ', end='')
+
 		v = func(*args, **kwargs)
-		print('elapsed time: {:.0f} min {:.0f} sec'.format(*divmod(time.time() - t0, 60)))
+
+		m, s = divmod(time.time() - t0, 60)
+
+		st = 'elapsed time:'
+
+		if m:
+			st += ' ' + f'{m:.0f} min'
+		if s:
+			st += ' ' + f'{s:.3f} sec'
+
+		print(st)
+
 
 		return v
 
@@ -60,8 +75,8 @@ class MTA:
 		self.channels_ext = [self.START] + self.channels + [self.CONV, self.NULL]
 		# make dictionary mapping a channel name to it's index
 		self.c2i = {c: i for i, c in enumerate(self.channels_ext)}
-
-		self.m = np.zeros(shape=(len(self.channels_ext), len(self.channels_ext)))
+		# and reverse
+		self.i2c = {i: c for c, i in self.c2i.items()}
 
 		self.removal_effects = defaultdict(float)
 		# touch points by channel
@@ -84,11 +99,8 @@ class MTA:
 		- the times are of the form 2018-11-26T03:54:26.532091+00:00
 		"""
 
-		print(f'running {self.add_exposure_times.__name__}...')
-
 		if 'exposure_times' in self.data.columns:
-			print('exposure times are available, moving on...')
-			return
+			return self
 
 		ts = []    # this will be a list of time instant lists one per path 
 
@@ -105,15 +117,12 @@ class MTA:
 
 		return self
 
-
+	@show_time
 	def remove_loops(self):
 
 		"""
 		remove transitions from a channel directly to itself, e.g. a > a
 		"""
-
-		print(f'running {self.remove_loops.__name__}...')
-		print(f'was {len(self.data):,} rows')
 
 		cpath = []
 		cexposure = []
@@ -147,8 +156,6 @@ class MTA:
 		self.data = _.join(self.data_[['path', 'exposure_times']].set_index('path'), 
 											on='path', how='inner').drop_duplicates(['path'])
 
-		print(f'now {len(self.data):,} rows')
-
 		return self
 
 	def normalize_dict(self, d):
@@ -162,6 +169,7 @@ class MTA:
 
 		return d
 
+	@show_time
 	def linear(self, share='same', normalize=True):
 
 		"""
@@ -214,6 +222,7 @@ class MTA:
 
 		return self
 
+	@show_time
 	def time_decay(self, count_direction='left', normalize=True):
 
 		"""
@@ -262,6 +271,7 @@ class MTA:
 
 		return self
 
+	@show_time
 	def first_touch(self, normalize=True):
 
 		first_touch = defaultdict(int)
@@ -278,6 +288,7 @@ class MTA:
 
 		return self
 
+	@show_time
 	def last_touch(self, normalize=True):
 
 		last_touch = defaultdict(int)
@@ -314,7 +325,7 @@ class MTA:
 			for ch_pair in self.pairs([self.START] + row.path):
 				c[ch_pair] += (row.total_conversions + row.total_null)
 
-			c[(row.path[-1], '(null)')] += row.total_null
+			c[(row.path[-1], self.NULL)] += row.total_null
 			c[(row.path[-1], self.CONV)] += row.total_conversions
 
 		return c
@@ -367,71 +378,42 @@ class MTA:
 		return tr
 
 	@show_time
-	def simulate_path(self, n=int(1e6), drop_state=None):
+	def simulate_path(self, trans_mat, drop_channel=None, n=int(1e6)):
 
 		"""
 		generate n random user journeys and see where these users end up - converted or not;
-		drop_state is a channel to exclude if specified
+		drop_channel is a channel to exclude from journeys if specified
 		"""
 
 		outcome_counts = defaultdict(int)
 
-		channel_idxs = list(self.c2i.values())
-
+		idx0 = self.c2i[self.START]
 		null_idx = self.c2i[self.NULL]
+		conv_idx = self.c2i[self.CONV]
 
-		m = copy.copy(self.m)
-
-		if drop_state:
-
-			drop_idx = self.c2i[drop_state]
-			# no exit from this state, i.e. it becomes (null)
-			m[drop_idx] = 0
-
-		else:
-
-			drop_idx = null_idx
+		drop_idx = self.c2i[drop_channel] if drop_channel else null_idx
 
 		for _ in range(n):
 
-			init_idx = self.c2i[self.START]
-			final_state = None
+			stop_flag = None
 
-			while not final_state:
+			while not stop_flag:
 
-				next_idx = np.random.choice(channel_idxs, p=m[init_idx], replace=False)
+				probs = [trans_mat.get((self.i2c[idx0], self.i2c[i]), 0) for i in range(len(self.channels_ext))]
 
-				if next_idx == self.c2i[self.CONV]:
+				# index of the channel where user goes next
+				idx1 = np.random.choice([self.c2i[c] for c in self.channels_ext], p=probs, replace=False)
+
+				if idx1 == conv_idx:
 					outcome_counts[self.CONV] += 1
-					final_state = True
-				elif next_idx in {null_idx, drop_idx}:
+					stop_flag = True
+				elif idx1 in {null_idx, drop_idx}:
 					outcome_counts[self.NULL] += 1
-					final_state = True
+					stop_flag = True
 				else:
-					init_idx = next_idx
+					idx0 = idx1
 
 		return outcome_counts
-
-	def calculate_removal_effects(self, normalize=True):
-
-		print('calculating removal effects...')
-
-		cvs = defaultdict()  # conversions by channel
-
-		cvs['no_removals'] = self.simulate_path()
-
-		for i, ch in enumerate(self.channels, 1):
-
-			print(f'{i}/{len(self.channels)}: removed channel {ch}...')
-
-			cvs[ch] = self.simulate_path(drop_state=ch)
-			self.removal_effects[ch] = round((cvs['no_removals'][self.CONV] - 
-												cvs[ch][self.CONV])/cvs['no_removals'][self.CONV], 6)
-
-		if normalize:
-			self.removal_effects = self.normalize_dict(self.removal_effects)
-
-		return self
 
 	def prob_convert(self, trans_mat, drop=None):
 
@@ -451,7 +433,7 @@ class MTA:
 
 		return p
 
-
+	@show_time
 	def markov(self, sim=False, normalize=True):
 
 		markov = defaultdict(float)
@@ -467,8 +449,15 @@ class MTA:
 				markov[c] = (p_conv - self.prob_convert(trans_mat=tr, drop=c))/p_conv
 		else:
 
+			outcomes = defaultdict(lambda: defaultdict(float))
 			# get conversion counts when all chennels are in place
-			outcomes_full = simulate_path(drop_state=None)
+			outcomes['full'] = self.simulate_path(trans_mat=tr, drop_channel=None)
+
+			for c in self.channels:
+
+				outcomes[c] = self.simulate_path(trans_mat=tr, drop_channel=c)
+				# removal effect for channel c
+				markov[c] = (outcomes['full'][self.CONV] - outcomes[c][self.CONV])/outcomes['full'][self.CONV]
 
 		if normalize:
 			markov = self.normalize_dict(markov)
@@ -478,6 +467,7 @@ class MTA:
 
 		return self
 
+	@show_time
 	def shao(self, normalize=True):
 
 		"""
@@ -492,7 +482,7 @@ class MTA:
 
 		for row in self.data.itertuples():
 
-			for n in [1,2]:
+			for n in range(1, 3):
 
 				for ch in combinations(set(row.path), n):
 					
@@ -580,7 +570,7 @@ class MTA:
 		
 		return np.math.factorial(s)*(np.math.factorial(n - s -1))/np.math.factorial(n)
 
-
+	@show_time
 	def shapley(self, max_coalition_size=2, normalize=True):
 
 		"""
@@ -607,6 +597,7 @@ class MTA:
 
 		return self
 
+	@show_time
 	def logistic_regression(self, test_size=0.25, ps=0.5, pc=0.5, normalize=True, n=2000):
 
 		"""
@@ -664,7 +655,7 @@ class MTA:
 		if normalize:
 			lr = self.normalize_dict(lr)
 
-		self.attribution['lr'] = lr
+		self.attribution['linreg'] = lr
 
 		return self
 
@@ -779,27 +770,23 @@ class MTA:
 
 		return (beta, omega, sum(df))
 
-
-	def additive_hazard(self, epochs=100, normalize=True):
+	@show_time
+	def additive_hazard(self, epochs=20, normalize=True):
 
 		"""
 		additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
 		"""
 
-		beta = {c: random.uniform(0.01,2) for c in self.channels}
-		omega = {c: random.uniform(0.01,2) for c in self.channels}
+		beta = {c: random.uniform(0.001,1) for c in self.channels}
+		omega = {c: random.uniform(0.001,1) for c in self.channels}
 
 		for _ in range(epochs):
-
-			print(f'epoch: {_+1}/{epochs}...')
 
 			beta, omega, h = self.update_coefs(beta, omega)
 
 			if h == 2*len(self.channels):
 				print(f'converged after {_ + 1} iterations')
 				break
-			else:
-				print(h)
 
 		# time window: take the max time instant across all journeys that converged
 
@@ -815,7 +802,7 @@ class MTA:
 		if normalize:
 			additive_hazard = self.normalize_dict(additive_hazard)
 
-		self.attribution['adh'] = additive_hazard
+		self.attribution['add_haz'] = additive_hazard
 
 		return self
 
@@ -829,9 +816,8 @@ if __name__ == '__main__':
 			.shao() \
 			.first_touch() \
 			.last_touch() \
-			.markov() \
+			.markov(sim=False) \
 			.logistic_regression() \
 			.additive_hazard() \
 			.show()
-
 	

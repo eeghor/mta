@@ -9,7 +9,7 @@ This package contains implementations the following Multi-Touch Attribution mode
 * Markov
 * So-called Simple Probabilistic Model by Shao and Li
 * Bagged Logistic Regression by Shao and Li
-* Additive Hazard (survival)
+* Additive Hazard (Survival)
 
 In addition, some popular heuristic “models” are included, specifically
 
@@ -36,6 +36,8 @@ and 5 customer journeys
 ```
 a > b > c > (null)
 ```
+
+There’s an option to generate timestamp data if you want to use the Additive Hazard model (the only model that explicitly incorporates exposure times).
 
 ### References
 
