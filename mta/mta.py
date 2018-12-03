@@ -9,6 +9,7 @@ import numpy as np
 import copy
 import json
 import os
+import sys
 
 import arrow
 
@@ -28,6 +29,7 @@ def show_time(func):
 		t0 = time.time()
 
 		print(f'running {func.__name__}.. ', end='')
+		sys.stdout.flush()
 
 		v = func(*args, **kwargs)
 
@@ -41,7 +43,6 @@ def show_time(func):
 			st += ' ' + f'{s:.3f} sec'
 
 		print(st)
-
 
 		return v
 
