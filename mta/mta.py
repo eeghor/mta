@@ -224,6 +224,42 @@ class MTA:
 		return self
 
 	@show_time
+	def position_based(self, r=(40,40), normalize=True):
+
+		"""
+		give 40% credit to the first and last channels and divide the rest equally across the remaining channels
+		"""
+
+		self.position_based = defaultdict(float)
+
+		for row in self.data.itertuples():
+
+			if row.total_conversions:
+
+				n = len(set(row.path))
+
+				if n == 1:
+					self.position_based[row.path[-1]] += row.total_conversions
+				elif n == 2:
+					equal_share  = row.total_conversions/n
+					self.position_based[row.path[0]] += equal_share
+					self.position_based[row.path[-1]] += equal_share
+				else:
+					self.position_based[row.path[0]] += r[0]*row.total_conversions/100
+					self.position_based[row.path[-1]] += r[1]*row.total_conversions/100
+
+					for c in row.path[1:-1]:
+						self.position_based[c] += (100 - sum(r))*row.total_conversions/(n - 2)/100
+
+		if normalize:
+			self.position_based = self.normalize_dict(self.position_based)
+
+		self.attribution['pos_based'] = self.position_based
+
+		return self
+
+
+	@show_time
 	def time_decay(self, count_direction='left', normalize=True):
 
 		"""
@@ -816,6 +852,7 @@ if __name__ == '__main__':
 			.shapley() \
 			.shao() \
 			.first_touch() \
+			.position_based() \
 			.last_touch() \
 			.markov(sim=False) \
 			.logistic_regression() \

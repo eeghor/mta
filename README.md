@@ -17,6 +17,7 @@ In addition, some popular heuristic “models” are included, specifically
 * Linear
 * Last Touch
 * Time Decay
+* Position Based
 
 ### Included Data
 
