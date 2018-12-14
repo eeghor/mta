@@ -6,6 +6,7 @@ import re
 import os
 import json
 import builtins
+import pandas as pd
 from collections import defaultdict
 
 
@@ -56,18 +57,18 @@ def remove_loops(df):
 
 	return df
 
-def first_touch(df):
+def touch(df, t='first'):
 
-	first_touch = defaultdict(int)
+	_touch = defaultdict(int)
 
 	df = remove_loops(df)
 	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
-	df = df.withColumn('ch_1', df.path.getItem(0))
+	df = df.withColumn('ch_1', df.path.getItem(0) if t == 'first' else df.path.getItem(size(df.path)-1))
 
 	for row in df.select('ch_1', 'total_conversions').groupBy('ch_1').sum().toDF('channel', 'counts').collect():
-		first_touch[row['channel']] = row['counts']
+		_touch[row['channel']] = row['counts']
 
-	return normalize_dict(first_touch)
+	return normalize_dict(_touch)
 
 # in pyspark Spark session is readily available as spark
 spark = SparkSession.builder.master("local").appName("test session").getOrCreate()
@@ -80,4 +81,11 @@ df = spark.read.option("inferSchema", "true") \
 		.option("header", "true") \
 		.csv("data/data.csv.gz")
 
-print(first_touch(df))
+attribution = defaultdict(lambda: defaultdict(float))
+
+attribution['last_touch'] = touch(df, 'last')
+attribution['first_touch'] = touch(df, 'first')
+
+res = pd.DataFrame.from_dict(attribution)
+
+print(res)
