@@ -8,6 +8,7 @@ import json
 import builtins
 import pandas as pd
 from collections import defaultdict
+from itertools import chain
 
 
 def normalize_dict(d):
@@ -70,6 +71,34 @@ def touch(df, t='first'):
 
 	return normalize_dict(_touch)
 
+count_unique = udf(lambda s: len(builtins.set(s)), IntegerType())
+
+def collect_shares(path, sh):
+
+	l = defaultdict(float)
+
+	for c in set(path):
+		l[c] += sh
+
+	return l
+
+collect_shares_UDF = udf(collect_shares, MapType(StringType(), IntegerType()))
+
+def linear(df, share='same'):
+
+	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
+	df = df.withColumn('n', count_unique(df.path))
+	df = df.withColumn('s', df.total_conversions/df.n)
+
+	df.show(n=2)
+	
+	dk = {}
+	dk  = {**dk, {**e for e in collect_shares_UDF(df.path, df.s)}}
+
+	print(dk)
+
+	return None
+
 # in pyspark Spark session is readily available as spark
 spark = SparkSession.builder.master("local").appName("test session").getOrCreate()
 
@@ -85,6 +114,8 @@ attribution = defaultdict(lambda: defaultdict(float))
 
 attribution['last_touch'] = touch(df, 'last')
 attribution['first_touch'] = touch(df, 'first')
+
+attribution['linear'] = linear(df)
 
 res = pd.DataFrame.from_dict(attribution)
 
