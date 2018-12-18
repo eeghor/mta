@@ -42,6 +42,21 @@ def remove_loops_path(s):
 
 	return clean_path
 
+def order_by_exposure_time(s):
+	
+	clean_path = []
+
+	for i, c in enumerate(s, 1):
+
+		if i == 1:
+			clean_path.append(c)
+		else:
+			if c not in clean_path:
+				clean_path.append(c)
+
+	return clean_path
+
+order_by_exposure_time_UDF = udf(order_by_exposure_time, ArrayType(StringType()))
 remove_loops_path_UDF = udf(remove_loops_path, ArrayType(StringType()))
 
 def remove_loops(df):
@@ -71,33 +86,39 @@ def touch(df, t='first'):
 
 	return normalize_dict(_touch)
 
+keep_unique = udf(lambda s: list(builtins.set(s)), ArrayType(StringType()))
 count_unique = udf(lambda s: len(builtins.set(s)), IntegerType())
 
-def collect_shares(path, sh):
-
-	l = defaultdict(float)
-
-	for c in set(path):
-		l[c] += sh
-
-	return l
-
-collect_shares_UDF = udf(collect_shares, MapType(StringType(), IntegerType()))
-
 def linear(df, share='same'):
+
+	_lin = defaultdict(float)
 
 	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
 	df = df.withColumn('n', count_unique(df.path))
 	df = df.withColumn('s', df.total_conversions/df.n)
 
-	df.show(n=2)
-	
-	dk = {}
-	dk  = {**dk, {**e for e in collect_shares_UDF(df.path, df.s)}}
+	for row in df.select(explode(keep_unique(df.path)).alias('channel'), df.s).groupBy('channel').sum().toDF('channel', 'counts').collect():
+		_lin[row['channel']] = row['counts']
 
-	print(dk)
+	return normalize_dict(_lin)
 
-	return None
+costs = udf(lambda p, s: {c: i*s/builtins.sum(range(1,len(p) + 1)) for i, c in enumerate(p, 1)}, MapType(StringType(), FloatType()))
+
+def time_decay(df):
+
+	dec_ = defaultdict(float)
+
+	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
+
+	df = df.withColumn('path', order_by_exposure_time_UDF(df.path))
+
+	df = df.withColumn('credits', costs(df.path, df.total_conversions))
+
+	for row in df.select(explode(df.credits)).groupBy('key').sum().toDF('channel', 'counts').collect():
+		dec_[row['channel']] = row['counts']
+
+	return normalize_dict(dec_)
+
 
 # in pyspark Spark session is readily available as spark
 spark = SparkSession.builder.master("local").appName("test session").getOrCreate()
@@ -114,8 +135,8 @@ attribution = defaultdict(lambda: defaultdict(float))
 
 attribution['last_touch'] = touch(df, 'last')
 attribution['first_touch'] = touch(df, 'first')
-
 attribution['linear'] = linear(df)
+attribution['time_decay'] = time_decay(df)
 
 res = pd.DataFrame.from_dict(attribution)
 
