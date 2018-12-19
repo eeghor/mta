@@ -119,6 +119,25 @@ def time_decay(df):
 
 	return normalize_dict(dec_)
 
+pos_creds = udf(lambda channels, n, convs: {c: cr for c, cr in zip(channels, 
+						[convs/1.] if n == 1 else [convs/2]*2 if n == 2 else [0.4*convs] + [0.2*convs]*(n-2) + [0.4*convs])}, MapType(StringType(), FloatType()))
+
+def position_based(df):
+
+	posb = defaultdict(float)
+
+	df = remove_loops(df)
+
+	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
+
+	df = df.withColumn('n', count_unique(df.path))
+	df = df.withColumn('cr', pos_creds(df.path, df.n, df.total_conversions))
+
+	for row in df.select(explode(df.cr)).groupBy('key').sum().toDF('channel', 'counts').collect():
+		posb[row['channel']] = row['counts']
+
+	return normalize_dict(posb)
+
 
 # in pyspark Spark session is readily available as spark
 spark = SparkSession.builder.master("local").appName("test session").getOrCreate()
@@ -137,6 +156,7 @@ attribution['last_touch'] = touch(df, 'last')
 attribution['first_touch'] = touch(df, 'first')
 attribution['linear'] = linear(df)
 attribution['time_decay'] = time_decay(df)
+attribution['position_based'] = position_based(df)
 
 res = pd.DataFrame.from_dict(attribution)
 
