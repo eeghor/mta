@@ -138,6 +138,14 @@ def position_based(df):
 
 	return normalize_dict(posb)
 
+def conversions_by_pair(df):
+
+	df = remove_loops(df)
+
+	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
+
+	df.show(n=5)
+
 
 # in pyspark Spark session is readily available as spark
 spark = SparkSession.builder.master("local").appName("test session").getOrCreate()
@@ -152,12 +160,14 @@ df = spark.read.option("inferSchema", "true") \
 
 attribution = defaultdict(lambda: defaultdict(float))
 
-attribution['last_touch'] = touch(df, 'last')
-attribution['first_touch'] = touch(df, 'first')
-attribution['linear'] = linear(df)
-attribution['time_decay'] = time_decay(df)
-attribution['position_based'] = position_based(df)
+# attribution['last_touch'] = touch(df, 'last')
+# attribution['first_touch'] = touch(df, 'first')
+# attribution['linear'] = linear(df)
+# attribution['time_decay'] = time_decay(df)
+# attribution['position_based'] = position_based(df)
 
-res = pd.DataFrame.from_dict(attribution)
+# res = pd.DataFrame.from_dict(attribution)
 
-print(res)
+# print(res)
+
+conversions_by_pair(df)
