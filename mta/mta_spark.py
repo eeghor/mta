@@ -138,6 +138,10 @@ def position_based(df):
 
 	return normalize_dict(posb)
 
+def pairs(row):
+
+	lst = ['(start)'] + lst + ['(conversion)'] if 
+
 def conversions_by_pair(df):
 
 	df = remove_loops(df)
