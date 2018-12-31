@@ -2,6 +2,8 @@ from pyspark.sql.types import *
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 
+from itertools import chain, tee, combinations
+
 import re
 import os
 import json
@@ -138,9 +140,28 @@ def position_based(df):
 
 	return normalize_dict(posb)
 
-def pairs(row):
+def pairs(lst):
 
-	lst = ['(start)'] + lst + ['(conversion)'] if 
+	it1, it2 = tee(lst)
+	next(it2, None)
+
+	return zip(it1, it2) 
+
+def count_pairs(row):
+
+	"""
+	count how many times channel pairs appear on all recorded customer journey paths
+	"""
+
+	c = defaultdict(int)
+
+	for ch_pair in pairs(['(start)'] + row['path']):
+			c[ch_pair] += (row['total_conversions'] + row['total_null'])
+
+		c[(row.path[-1], self.NULL)] += row.total_null
+		c[(row.path[-1], self.CONV)] += row.total_conversions
+
+	return c
 
 def conversions_by_pair(df):
 
