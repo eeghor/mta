@@ -150,6 +150,7 @@ def pairs(lst):
 def count_pairs(row):
 
 	"""
+	adding inputs
 	count how many times channel pairs appear on all recorded customer journey paths
 	"""
 
