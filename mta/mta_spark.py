@@ -122,7 +122,7 @@ def time_decay(df):
 	return normalize_dict(dec_)
 
 pos_creds = udf(lambda channels, n, convs: {c: cr for c, cr in zip(channels, 
-						[convs/1.] if n == 1 else [convs/2]*2 if n == 2 else [0.4*convs] + [0.2*convs]*(n-2) + [0.4*convs])}, MapType(StringType(), FloatType()))
+						[convs/1.] if n == 1 else [convs/2.]*2 if n == 2 else [0.4*convs] + [0.2*convs]*(n-2) + [0.4*convs])}, MapType(StringType(), FloatType()))
 
 def position_based(df):
 
@@ -140,37 +140,45 @@ def position_based(df):
 
 	return normalize_dict(posb)
 
-def pairs(lst):
 
-	it1, it2 = tee(lst)
+def window(path, conversions, nulls):
+
+	aug_path = ['(start)'] + path
+
+	it1, it2 = tee(aug_path)
 	next(it2, None)
 
-	return zip(it1, it2) 
+	c = [f'({it1},{it2})' for it1, it2 in zip(it1, it2)]
 
-def count_pairs(row):
-
-	"""
-	adding inputs
-	count how many times channel pairs appear on all recorded customer journey paths
-	"""
-
-	c = defaultdict(int)
-
-	for ch_pair in pairs(['(start)'] + row['path']):
-			c[ch_pair] += (row['total_conversions'] + row['total_null'])
-
-		c[(row.path[-1], self.NULL)] += row.total_null
-		c[(row.path[-1], self.CONV)] += row.total_conversions
+	if nulls:
+		c.append(f'({path[-1]}, (null))')
+	if conversions:
+		c.append(f'({path[-1]}, (conversion)')
 
 	return c
 
-def conversions_by_pair(df):
+window_udf = udf(window, ArrayType(StringType()))
+
+def pair_convs_and_exits(df):
+
+	"""
+	return a dictionary that maps each pair of touch points on the path to the number of conversions and
+	exits this pair were involved into
+	"""
 
 	df = remove_loops(df)
 
 	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
 
-	df.show(n=5)
+	df = df.withColumn('dicts', window_udf(df.path, df.total_conversions, df.total_null))
+
+	k = defaultdict(lambda: defaultdict(int))
+
+	for row in df.select(explode(df.dicts), df.total_conversions, df.total_null).collect():
+		k[row['col']]['conversions'] += row['total_conversions']
+		k[row['col']]['nulls'] += row['total_null']
+
+	return k
 
 
 # in pyspark Spark session is readily available as spark
@@ -184,6 +192,8 @@ df = spark.read.option("inferSchema", "true") \
 		.option("header", "true") \
 		.csv("data/data.csv.gz")
 
+c = defaultdict(int)
+
 attribution = defaultdict(lambda: defaultdict(float))
 
 # attribution['last_touch'] = touch(df, 'last')
@@ -196,4 +206,9 @@ attribution = defaultdict(lambda: defaultdict(float))
 
 # print(res)
 
-conversions_by_pair(df)
+print(pair_convs_and_exits(df))
+
+# print(c)
+
+
+# df.show(5)
