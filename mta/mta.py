@@ -521,6 +521,8 @@ class MTA:
 
 			for n in range(1, 3):
 
+				# # combinations('ABCD', 2) --> AB AC AD BC BD CD
+				
 				for ch in combinations(set(row.path), n):
 					
 					t = self.ordered_tuple(ch)

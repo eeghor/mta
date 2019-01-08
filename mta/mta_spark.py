@@ -180,6 +180,30 @@ def pair_convs_and_exits(df):
 
 	return k
 
+def trans_matrix(df):
+
+		"""
+		calculate transition matrix which will actually be a dictionary mapping 
+		a pair (a, b) to the probability of moving from a to b, e.g. T[(a, b)] = 0.5
+		"""
+
+		tr = defaultdict(float)
+
+		outs = defaultdict(int)
+
+		# here pairs are unordered
+		pair_counts = self.count_pairs()
+
+		for pair in pair_counts:
+
+			outs[pair[0]] += pair_counts[pair]
+
+		for pair in pair_counts:
+
+			tr[pair] = pair_counts[pair]/outs[pair[0]]
+
+		return tr
+
 
 # in pyspark Spark session is readily available as spark
 spark = SparkSession.builder.master("local").appName("test session").getOrCreate()
