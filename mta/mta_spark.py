@@ -175,34 +175,32 @@ def pair_convs_and_exits(df):
 	k = defaultdict(lambda: defaultdict(int))
 
 	for row in df.select(explode(df.dicts), df.total_conversions, df.total_null).collect():
+		
 		k[row['col']]['conversions'] += row['total_conversions']
 		k[row['col']]['nulls'] += row['total_null']
 
 	return k
 
-def trans_matrix(df):
+def trans_matrix(k):
 
-		"""
-		calculate transition matrix which will actually be a dictionary mapping 
-		a pair (a, b) to the probability of moving from a to b, e.g. T[(a, b)] = 0.5
-		"""
+	"""
+	calculate transition matrix which will actually be a dictionary mapping 
+	a pair (a, b) to the probability of moving from a to b, e.g. T[(a, b)] = 0.5
+	"""
 
-		tr = defaultdict(float)
+	tr = defaultdict(float)
 
-		outs = defaultdict(int)
+	outs = defaultdict(int)
 
-		# here pairs are unordered
-		pair_counts = self.count_pairs()
+	for pair in k:
 
-		for pair in pair_counts:
+		outs[pair[0]] += k[pair]['conversions'] + k[pair]['null']
 
-			outs[pair[0]] += pair_counts[pair]
+	for pair in k:
 
-		for pair in pair_counts:
+		tr[pair] = (k[pair]['conversions'] + k[pair]['null'])/outs[pair[0]]
 
-			tr[pair] = pair_counts[pair]/outs[pair[0]]
-
-		return tr
+	return tr
 
 
 # in pyspark Spark session is readily available as spark
@@ -230,9 +228,10 @@ attribution = defaultdict(lambda: defaultdict(float))
 
 # print(res)
 
-print(pair_convs_and_exits(df))
+k = pair_convs_and_exits(df)
+t = trans_matrix(k)
 
-# print(c)
+print(t)
 
 
 # df.show(5)
