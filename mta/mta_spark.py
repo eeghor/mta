@@ -181,6 +181,67 @@ def pair_convs_and_exits(df):
 
 	return k
 
+def ord_tuple(t, start='(start)'):
+
+	"""
+	return tuple t ordered 
+	"""
+
+	sort = lambda t: tuple(sorted(list(t)))
+
+	return (t[0],) + sort(t[1:]) if (t[0] == start) and (len(t) > 1) else sort(t)
+
+
+def combs(tp_list, convs, nulls, nc=3, count_duplicates=False):
+
+	"""
+	calculate the sum of all conversions and exits (nulls) associated with presence
+	of various combination of touch points on a path; then calculate the probability of
+	conversion as a ratio of conversions to all outcomes for each combination
+
+	inputs:
+	-------
+	
+		tp_list: a list of touch points, e.g. [alpha, beta, gamma, alpha, mu, ...]
+		convs: total number of conversions for this path
+		nulls: total number of nulls for this path
+		nc: length of element subsequences for combinations, e.g. 2 for pairs, 1 for singles, etc.
+		count_duplicates: if True, count combinations
+
+	output:
+	------
+		a dictionary mapping combinations to counts of conversions and nulls and probabilities of conversion, 
+		e.g. {(alpha, gamma): {'cs': 3, 
+								'ns': 6, 
+								'conv_prob': 0.3}, ...}
+	"""
+
+	dedupl_tp_list = [tp_list[0]]
+
+	if not count_duplicates:
+		for _ in tp_list[1:]:
+			if _ not in dedupl_tp_list[-1]:
+				dedupl_tp_list.append(_)
+		tp_list = dedupl_tp_list
+
+	r = defaultdict(lambda: defaultdict(float))
+
+	for n in range(1, nc+1):
+
+		# combinations('ABCD', 2) --> AB AC AD BC BD CD
+		for c in combinations(tp_list, n):
+			
+			t = ord_tuple(c)  # tuple(sorted(list(t)))
+
+			if t != ('(start)',):
+				r[t]['cs'] += convs
+				r[t]['ns'] += nulls
+
+	for c in r:
+		r[c]['conv_prob'] = r[c]['cs']/(r[c]['cs'] + r[c]['ns'])
+
+	return r
+
 def trans_matrix(k):
 
 	"""
@@ -228,10 +289,12 @@ attribution = defaultdict(lambda: defaultdict(float))
 
 # print(res)
 
-k = pair_convs_and_exits(df)
-t = trans_matrix(k)
+# k = pair_convs_and_exits(df)
+# t = trans_matrix(k)
 
-print(t)
+# print(t)
 
 
 # df.show(5)
+o = combs(['(start)', 'alpha', 'gamma', 'beta', 'gamma', 'kappa'], 3, 16, nc=3)
+print(o)
