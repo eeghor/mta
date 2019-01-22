@@ -373,22 +373,10 @@ class MTA:
 		return tuple t ordered 
 		"""
 
-		if not isinstance(t, tuple):
-			raise TypeError(f'provided value {t} is not tuple!')
+		sort = lambda t: tuple(sorted(list(t)))
 
-		if all([len(t) == 1, t[0] in '(start) (null) (conversion)'.split()]):
-			raise Exception(f'wrong transition {t}!')
+		return (t[0],) + sort(t[1:]) if (t[0] == start) and (len(t) > 1) else sort(t)
 
-		if (len(t) > 1) and (t[-1] == self.START): 
-			raise Exception(f'wrong transition {t}!')
-
-		if (len(t) > 1) and (t[0] == self.START):
-			return (t[0],) + tuple(sorted(list(t[1:])))
-
-		if (len(t) > 1) and (t[-1] in '(null) (conversion)'.split()):
-			return tuple(sorted(list(t[:-1]))) + (t[-1],)
-
-		return tuple(sorted(list(t)))
 
 	def trans_matrix(self):
 

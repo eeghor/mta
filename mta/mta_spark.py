@@ -192,16 +192,15 @@ def ord_tuple(t, start='(start)'):
 	return (t[0],) + sort(t[1:]) if (t[0] == start) and (len(t) > 1) else sort(t)
 
 
-def combs(tp_list, convs, nulls, nc=3, count_duplicates=False):
+def outcome_counts(tp_list, convs, nulls, nc=3, count_duplicates=False):
 
 	"""
 	calculate the sum of all conversions and exits (nulls) associated with presence
-	of various combination of touch points on a path; then calculate the probability of
-	conversion as a ratio of conversions to all outcomes for each combination
+	of various combination of touch points on a path tp_list
 
 	inputs:
 	-------
-	
+
 		tp_list: a list of touch points, e.g. [alpha, beta, gamma, alpha, mu, ...]
 		convs: total number of conversions for this path
 		nulls: total number of nulls for this path
@@ -212,8 +211,7 @@ def combs(tp_list, convs, nulls, nc=3, count_duplicates=False):
 	------
 		a dictionary mapping combinations to counts of conversions and nulls and probabilities of conversion, 
 		e.g. {(alpha, gamma): {'cs': 3, 
-								'ns': 6, 
-								'conv_prob': 0.3}, ...}
+								'ns': 6}, ...}
 	"""
 
 	dedupl_tp_list = [tp_list[0]]
@@ -236,9 +234,6 @@ def combs(tp_list, convs, nulls, nc=3, count_duplicates=False):
 			if t != ('(start)',):
 				r[t]['cs'] += convs
 				r[t]['ns'] += nulls
-
-	for c in r:
-		r[c]['conv_prob'] = r[c]['cs']/(r[c]['cs'] + r[c]['ns'])
 
 	return r
 
@@ -296,5 +291,5 @@ attribution = defaultdict(lambda: defaultdict(float))
 
 
 # df.show(5)
-o = combs(['(start)', 'alpha', 'gamma', 'beta', 'gamma', 'kappa'], 3, 16, nc=3)
+o = combination_contributions(['(start)', 'alpha', 'gamma', 'beta', 'gamma', 'kappa'], 3, 16, nc=3)
 print(o)
