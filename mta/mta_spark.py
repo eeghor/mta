@@ -13,6 +13,12 @@ from collections import defaultdict
 from itertools import chain
 
 
+class Shapley:
+
+	def __init__(self):
+		pass
+
+		
 def normalize_dict(d):
 	"""
 	returns a value-normalized version of dictionary d
