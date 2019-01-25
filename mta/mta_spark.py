@@ -13,6 +13,35 @@ from collections import defaultdict
 from itertools import chain
 
 
+class BaselineModel:
+
+	"""
+	basic class implementing functionality commonly required by attribution models
+	"""
+
+	def __init__(self):
+
+		self.NULL = '(null)'
+		self.START = '(start)'
+		self.CONV = '(conversion)'
+
+	def load(self, file):
+
+		"""
+		load data; this method needs to support ingestion from several possible sources:
+			- local hard drive
+			- buckets (S3 or GC)
+		"""
+
+		self.sep = ','
+		self.data = pd.read_csv(file)
+
+		self.required_columns = set('path total_conversions total_conversion_value total_null exposure_times'.split())
+
+		if not (set(self.data.columns) <= self.required_columns):  # note: ok to have extra columns
+			raise ValueError(f'some required column names are missing!')
+
+
 class Shapley:
 
 	def __init__(self):
