@@ -41,8 +41,19 @@ class BaselineModel:
 		if not (set(self.data.columns) <= self.required_columns):  # note: ok to have extra columns
 			raise ValueError(f'some required column names are missing!')
 
+	def normalize_dict(d):
+	"""
+	returns a value-normalized version of dictionary d
+	"""
+	sum_all_values = builtins.sum(d.values())
 
-class Shapley:
+	for _ in d:
+		d[_] = builtins.round(d[_]/sum_all_values, 6)
+
+	return d
+
+
+class Shapley(BaselineModel):
 
 	def __init__(self):
 		pass
