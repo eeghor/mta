@@ -6,7 +6,7 @@ MTA models with Pyspark; to be included in the MTA package
 
 from pyspark.sql.types import *
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import udf, concat_ws, split
+from pyspark.sql.functions import udf, concat_ws, split, explode, lit
 
 from itertools import chain, tee, combinations
 
@@ -45,11 +45,32 @@ class BaselineModel:
 
 		return clean_path
 
+	@staticmethod
+	@udf(returnType=ArrayType(StringType())) 
+	def window(path):
+
+		"""
+		return a list of all touch point pairs present on the list path;
+		for example, for a path a > b > c return a list [((start), a), (a,b), (b,c), (c, (end))]
+		"""
+
+		# aug_path = [BaselineModel.START] + path + [BaselineModel.END]
+
+		# aug_path = ['(start)'] + path + ['(end)']
+
+		it1, it2 = tee(path)
+		next(it2, None)
+
+		c = [f'({it1},{it2})' for it1, it2 in zip(it1, it2)]
+
+		return c
+
 	def __init__(self):
 
 		self.NULL = '(null)'
 		self.START = '(start)'
 		self.CONV = '(conversion)'
+		self.END = '(end)'
 
 	def load(self, file):
 
@@ -72,7 +93,54 @@ class BaselineModel:
 
 		return self
 
-	
+	def remove_loops(self):
+
+		"""
+		remove loops from paths and update conversion counts
+		"""
+
+		self.data = self.data.withColumn('path', \
+							concat_ws(' > ', \
+								BaselineModel.get_path_without_loops(split(self.data.path, r'\s*>\s*'))))
+
+		# since now we may have some duplicate paths, we need to remove duplicates and update conversion counts
+		self.data = self.data.groupBy('path').sum() \
+						.toDF(*['path', 'total_conversions', 'total_conversion_value', 'total_null'])
+
+		return self
+
+	def pair_convs_and_exits(self):
+
+		"""
+		return a dictionary that maps each pair of touch points on the path to the number of conversions and
+		nulls this pair is involved into
+		"""
+
+		k = defaultdict(lambda: defaultdict(int))
+
+		self.data = self.data.withColumn('path', split(concat_ws(' > ', lit(f'{self.START}'), self.data.path, lit(f'{self.END}')), r'\s*>\s*'))
+		self.data.show()
+
+		self.data = self.data.withColumn('pairs', BaselineModel.window(self.data.path))
+
+		self.data.show()
+
+		for row in self.data.select(explode(self.data.pairs), self.data.total_conversions, self.data.total_null).collect():
+			
+			k[row['col']]['conversions'] += row['total_conversions']
+			k[row['col']]['nulls'] += row['total_null']
+
+		return k
+
+	def ordered_tuple(self, t):
+
+		"""
+		return tuple t ordered 
+		"""
+
+		sort = lambda t: tuple(sorted(list(t)))
+
+		return (t[0],) + sort(t[1:]) if (t[0] == self.START) and (len(t) > 1) else sort(t)
 
 	# def normalize_dict(d):
 	# 	"""
@@ -85,31 +153,9 @@ class BaselineModel:
 	
 	# 	return d
 
-	def remove_loops(self):
+	
 
-		"""
-		remove loops from paths and update conversion counts
-		"""
-
-		self.data = self.data.withColumn('path', \
-							concat_ws(' > ', \
-								self.get_path_without_loops(split(self.data.path, r'\s*>\s*'))))
-
-		# since now we may have some duplicate paths, we need to remove duplicates and update conversion counts
-		self.data = self.data.groupBy('path').sum() \
-						.toDF(*['path', 'total_conversions', 'total_conversion_value', 'total_null'])
-
-		return self
-
-	# def ord_tuple(t, start='(start)'):
-
-	# 	"""
-	# 	return tuple t ordered 
-	# 	"""
-
-	# 	sort = lambda t: tuple(sorted(list(t)))
-
-	# 	return (t[0],) + sort(t[1:]) if (t[0] == start) and (len(t) > 1) else sort(t)
+	
 
 
 # class Shapley(BaselineModel):
@@ -203,45 +249,11 @@ class BaselineModel:
 # 	return normalize_dict(posb)
 
 
-# def window(path, conversions, nulls):
 
-# 	aug_path = ['(start)'] + path
-
-# 	it1, it2 = tee(aug_path)
-# 	next(it2, None)
-
-# 	c = [f'({it1},{it2})' for it1, it2 in zip(it1, it2)]
-
-# 	if nulls:
-# 		c.append(f'({path[-1]}, (null))')
-# 	if conversions:
-# 		c.append(f'({path[-1]}, (conversion)')
-
-# 	return c
 
 # window_udf = udf(window, ArrayType(StringType()))
 
-# def pair_convs_and_exits(df):
 
-# 	"""
-# 	return a dictionary that maps each pair of touch points on the path to the number of conversions and
-# 	exits this pair were involved into
-# 	"""
-
-# 	df = remove_loops(df)
-
-# 	df = df.withColumn('path', split(df.path, r'\s*>\s*'))
-
-# 	df = df.withColumn('dicts', window_udf(df.path, df.total_conversions, df.total_null))
-
-# 	k = defaultdict(lambda: defaultdict(int))
-
-# 	for row in df.select(explode(df.dicts), df.total_conversions, df.total_null).collect():
-		
-# 		k[row['col']]['conversions'] += row['total_conversions']
-# 		k[row['col']]['nulls'] += row['total_null']
-
-# 	return k
 
 
 # def outcome_counts(tp_list, convs, nulls, nc=3, count_duplicates=False):
@@ -281,7 +293,7 @@ class BaselineModel:
 # 		# combinations('ABCD', 2) --> AB AC AD BC BD CD
 # 		for c in combinations(tp_list, n):
 			
-# 			t = ord_tuple(c)  # tuple(sorted(list(t)))
+# 			t = ordered_tuple(c)  # tuple(sorted(list(t)))
 
 # 			if t != ('(start)',):
 # 				r[t]['cs'] += convs
@@ -324,6 +336,8 @@ if __name__ == '__main__':
 	bl.load(file='data/data.csv.gz').remove_loops()
 
 	bl.data.show()
+
+	print(bl.pair_convs_and_exits())
 
 	# read the data file
 	# df = spark.read.option("inferSchema", "true") \
