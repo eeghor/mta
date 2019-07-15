@@ -375,7 +375,7 @@ class MTA:
 
 		sort = lambda t: tuple(sorted(list(t)))
 
-		return (t[0],) + sort(t[1:]) if (t[0] == start) and (len(t) > 1) else sort(t)
+		return (t[0],) + sort(t[1:]) if (t[0] == self.START) and (len(t) > 1) else sort(t)
 
 
 	def trans_matrix(self):
@@ -835,7 +835,7 @@ class MTA:
 
 if __name__ == '__main__':
 
-	mta = MTA(allow_loops=False)
+	mta = MTA(data='data.csv.gz', allow_loops=False)
 
 	mta.linear(share='proportional') \
 			.time_decay(count_direction='right') \

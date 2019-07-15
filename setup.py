@@ -2,8 +2,8 @@ from setuptools import setup
 import os
 
 setup(name='mta',
-      version='0.0.4',
-      description='Multi-Touch Attrobution',
+      version='0.0.5',
+      description='Multi-Touch Attribution',
       classifiers=[
       	'Development Status :: 3 - Alpha',
             'Programming Language :: Python :: 3.6'
