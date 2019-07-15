@@ -52,7 +52,7 @@ class MTA:
 
 	def __init__(self, data='data.csv.gz', allow_loops=False, add_timepoints=True, sep=' > '):
 
-		self.data = pd.read_csv(os.path.join('data', data))
+		self.data = pd.read_csv(os.path.join(os.path.dirname(__file__),'data', data))
 		self.sep = sep
 		self.NULL = '(null)'
 		self.START = '(start)'
