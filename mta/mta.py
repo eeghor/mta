@@ -692,7 +692,7 @@ class MTA:
 		show simulation results
 		"""
 
-		res = pd.DataFrame.from_dict(mta.attribution)
+		res = pd.DataFrame.from_dict(self.attribution)
 
 		print(res)
 
