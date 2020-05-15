@@ -1,9 +1,0 @@
-README.md
-setup.py
-mta/__init__.py
-mta/mta.py
-mta.egg-info/PKG-INFO
-mta.egg-info/SOURCES.txt
-mta.egg-info/dependency_links.txt
-mta.egg-info/top_level.txt
-mta/data/data.csv.gz

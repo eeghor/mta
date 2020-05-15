@@ -1,9 +1,6 @@
-.DS_Store
+*DS_Store
+mta.egg-info/
 *.pyc
-*.egg-info/
-.ipynb_checkpoints/
-mta/.ipynb_checkpoints/
+.ipynb_checkpoints
 build/
 dist/
-mta/spark-warehouse/
-mta/mta_spark.py
