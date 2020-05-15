@@ -643,15 +643,17 @@ class MTA:
 		for i, row in enumerate(self.data.itertuples()):
 
 			for _ in range(row.total_conversions):
+
 				lists_.append({c: 1 for c in row.path})
 				flags_.append(1)
 
 			for _ in range(row.total_null):
+
 				lists_.append({c: 1 for c in row.path})
 				flags_.append(0)
 
 		data_ = pd.concat([pd.DataFrame(lists_).fillna(0), 
-								pd.DataFrame({'conv': flags_})], axis=1).sample(frac=1.0)
+						   pd.DataFrame({'conv': flags_})], axis=1).sample(frac=1.0)
 
 		for _ in range(1, n + 1):
 
@@ -837,15 +839,16 @@ if __name__ == '__main__':
 
 	mta = MTA(data='data.csv.gz', allow_loops=False)
 
-	mta.linear(share='proportional') \
-			.time_decay(count_direction='right') \
-			.shapley() \
-			.shao() \
-			.first_touch() \
-			.position_based() \
-			.last_touch() \
-			.markov(sim=False) \
-			.logistic_regression() \
-			.additive_hazard() \
-			.show()
+	(mta
+		.linear(share='proportional') 
+		.time_decay(count_direction='right') 
+		.shapley() 
+		.shao() 
+		.first_touch() 
+		.position_based() 
+		.last_touch() 
+		.markov(sim=False) 
+		.logistic_regression() 
+		.additive_hazard() 
+		.show())
 	

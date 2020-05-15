@@ -9,6 +9,7 @@ import numpy as np
 import copy
 import json
 import os
+import sys
 
 import arrow
 
@@ -28,6 +29,7 @@ def show_time(func):
 		t0 = time.time()
 
 		print(f'running {func.__name__}.. ', end='')
+		sys.stdout.flush()
 
 		v = func(*args, **kwargs)
 
@@ -42,7 +44,6 @@ def show_time(func):
 
 		print(st)
 
-
 		return v
 
 	return wrapper
@@ -51,7 +52,7 @@ class MTA:
 
 	def __init__(self, data='data.csv.gz', allow_loops=False, add_timepoints=True, sep=' > '):
 
-		self.data = pd.read_csv(os.path.join('data', data))
+		self.data = pd.read_csv(os.path.join(os.path.dirname(__file__),'data', data))
 		self.sep = sep
 		self.NULL = '(null)'
 		self.START = '(start)'
@@ -223,6 +224,42 @@ class MTA:
 		return self
 
 	@show_time
+	def position_based(self, r=(40,40), normalize=True):
+
+		"""
+		give 40% credit to the first and last channels and divide the rest equally across the remaining channels
+		"""
+
+		self.position_based = defaultdict(float)
+
+		for row in self.data.itertuples():
+
+			if row.total_conversions:
+
+				n = len(set(row.path))
+
+				if n == 1:
+					self.position_based[row.path[-1]] += row.total_conversions
+				elif n == 2:
+					equal_share  = row.total_conversions/n
+					self.position_based[row.path[0]] += equal_share
+					self.position_based[row.path[-1]] += equal_share
+				else:
+					self.position_based[row.path[0]] += r[0]*row.total_conversions/100
+					self.position_based[row.path[-1]] += r[1]*row.total_conversions/100
+
+					for c in row.path[1:-1]:
+						self.position_based[c] += (100 - sum(r))*row.total_conversions/(n - 2)/100
+
+		if normalize:
+			self.position_based = self.normalize_dict(self.position_based)
+
+		self.attribution['pos_based'] = self.position_based
+
+		return self
+
+
+	@show_time
 	def time_decay(self, count_direction='left', normalize=True):
 
 		"""
@@ -336,22 +373,10 @@ class MTA:
 		return tuple t ordered 
 		"""
 
-		if not isinstance(t, tuple):
-			raise TypeError(f'provided value {t} is not tuple!')
+		sort = lambda t: tuple(sorted(list(t)))
 
-		if all([len(t) == 1, t[0] in '(start) (null) (conversion)'.split()]):
-			raise Exception(f'wrong transition {t}!')
+		return (t[0],) + sort(t[1:]) if (t[0] == self.START) and (len(t) > 1) else sort(t)
 
-		if (len(t) > 1) and (t[-1] == self.START): 
-			raise Exception(f'wrong transition {t}!')
-
-		if (len(t) > 1) and (t[0] == self.START):
-			return (t[0],) + tuple(sorted(list(t[1:])))
-
-		if (len(t) > 1) and (t[-1] in '(null) (conversion)'.split()):
-			return tuple(sorted(list(t[:-1]))) + (t[-1],)
-
-		return tuple(sorted(list(t)))
 
 	def trans_matrix(self):
 
@@ -484,6 +509,8 @@ class MTA:
 
 			for n in range(1, 3):
 
+				# # combinations('ABCD', 2) --> AB AC AD BC BD CD
+				
 				for ch in combinations(set(row.path), n):
 					
 					t = self.ordered_tuple(ch)
@@ -616,15 +643,17 @@ class MTA:
 		for i, row in enumerate(self.data.itertuples()):
 
 			for _ in range(row.total_conversions):
+
 				lists_.append({c: 1 for c in row.path})
 				flags_.append(1)
 
 			for _ in range(row.total_null):
+
 				lists_.append({c: 1 for c in row.path})
 				flags_.append(0)
 
 		data_ = pd.concat([pd.DataFrame(lists_).fillna(0), 
-								pd.DataFrame({'conv': flags_})], axis=1).sample(frac=1.0)
+						   pd.DataFrame({'conv': flags_})], axis=1).sample(frac=1.0)
 
 		for _ in range(1, n + 1):
 
@@ -665,7 +694,7 @@ class MTA:
 		show simulation results
 		"""
 
-		res = pd.DataFrame.from_dict(mta.attribution)
+		res = pd.DataFrame.from_dict(self.attribution)
 
 		print(res)
 
@@ -808,16 +837,18 @@ class MTA:
 
 if __name__ == '__main__':
 
-	mta = MTA(allow_loops=False)
+	mta = MTA(data='data.csv.gz', allow_loops=False)
 
-	mta.linear(share='proportional') \
-			.time_decay(count_direction='right') \
-			.shapley() \
-			.shao() \
-			.first_touch() \
-			.last_touch() \
-			.markov(sim=False) \
-			.logistic_regression() \
-			.additive_hazard() \
-			.show()
+	(mta
+		.linear(share='proportional') 
+		.time_decay(count_direction='right') 
+		.shapley() 
+		.shao() 
+		.first_touch() 
+		.position_based() 
+		.last_touch() 
+		.markov(sim=False) 
+		.logistic_regression() 
+		.additive_hazard() 
+		.show())
 	

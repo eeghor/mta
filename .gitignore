@@ -1,2 +1,9 @@
-
-\.DS_Store
+.DS_Store
+*.pyc
+*.egg-info/
+.ipynb_checkpoints/
+mta/.ipynb_checkpoints/
+build/
+dist/
+mta/spark-warehouse/
+mta/mta_spark.py
