@@ -10,845 +10,955 @@ import copy
 import json
 import os
 import sys
-
+from typing import List, Any, Dict
 import arrow
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
+
 def show_time(func):
 
-	"""
-	timer decorator
-	"""
+    """
+    timer decorator
+    """
 
-	@wraps(func)
-	def wrapper(*args, **kwargs):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
 
-		t0 = time.time()
+        t0 = time.time()
 
-		print(f'running {func.__name__}.. ', end='')
-		sys.stdout.flush()
+        print(f"running {func.__name__}.. ", end="")
+        sys.stdout.flush()
 
-		v = func(*args, **kwargs)
+        v = func(*args, **kwargs)
 
-		m, s = divmod(time.time() - t0, 60)
+        m, s = divmod(time.time() - t0, 60)
 
-		st = 'elapsed time:'
+        st = "elapsed time:"
 
-		if m:
-			st += ' ' + f'{m:.0f} min'
-		if s:
-			st += ' ' + f'{s:.3f} sec'
+        if m:
+            st += " " + f"{m:.0f} min"
+        if s:
+            st += " " + f"{s:.3f} sec"
 
-		print(st)
+        print(st)
 
-		return v
+        return v
 
-	return wrapper
+    return wrapper
+
 
 class MTA:
+    def __init__(
+        self,
+        data: str = "data.csv.gz",
+        allow_loops: bool = False,
+        add_timepoints: bool = True,
+        sep: str = " > ",
+    ):
+
+        self.data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", data))
+        self.sep = sep
+        self.NULL = "(null)"
+        self.START = "(start)"
+        self.CONV = "(conversion)"
+
+        if not (
+            set(self.data.columns)
+            <= set(
+                "path total_conversions total_conversion_value total_null exposure_times".split()
+            )
+        ):
+            raise ValueError(f"wrong column names in {data}!")
+
+        if add_timepoints:
+            self.add_exposure_times(1)
+
+        if not allow_loops:
+            self.remove_loops()
+
+        # we'll work with lists in path and exposure_times from now on
+        self.data[["path", "exposure_times"]] = self.data[
+            ["path", "exposure_times"]
+        ].applymap(lambda _: [ch.strip() for ch in _.split(self.sep.strip())])
+
+        # make a sorted list of channel names
+        self.channels = sorted(
+            list({ch for ch in chain.from_iterable(self.data["path"])})
+        )
+        # add some extra channels
+        self.channels_ext = [self.START] + self.channels + [self.CONV, self.NULL]
+        # make dictionary mapping a channel name to it's index
+        self.c2i = {c: i for i, c in enumerate(self.channels_ext)}
+        # and reverse
+        self.i2c = {i: c for c, i in self.c2i.items()}
+
+        self.removal_effects = defaultdict(float)
+        # touch points by channel
+        self.tps_by_channel = {
+            "c1": ["beta", "iota", "gamma"],
+            "c2": ["alpha", "delta", "kappa", "mi"],
+            "c3": ["epsilon", "lambda", "eta", "theta", "zeta"],
+        }
+
+        self.attribution = defaultdict(lambda: defaultdict(float))
+
+    def __repr__(self):
+
+        return f'{self.__class__.__name__} with {len(self.channels)} channels: {", ".join(self.channels)}'
+
+    def add_exposure_times(self, dt=None):
+
+        """
+        generate synthetic exposure times; if dt is specified, the exposures will be dt=1 sec away from one another, otherwise
+        we'll generate time spans randomly
+
+        - the times are of the form 2018-11-26T03:54:26.532091+00:00
+        """
+
+        if "exposure_times" in self.data.columns:
+            return self
+
+        ts = []  # this will be a list of time instant lists one per path
+
+        if dt:
+
+            _t0 = arrow.utcnow()
+
+            self.data["path"].str.split(">").apply(
+                lambda _: [ch.strip() for ch in _]
+            ).apply(
+                lambda lst: ts.append(
+                    self.sep.join(
+                        [
+                            r.format("YYYY-MM-DD HH:mm:ss")
+                            for r in arrow.Arrow.range(
+                                "second", _t0, _t0.shift(seconds=+(len(lst) - 1))
+                            )
+                        ]
+                    )
+                )
+            )
+
+        self.data["exposure_times"] = ts
+
+        return self
+
+    @show_time
+    def remove_loops(self):
+
+        """
+        remove transitions from a channel directly to itself, e.g. a > a
+        """
+
+        cpath = []
+        cexposure = []
 
-	def __init__(self, data='data.csv.gz', allow_loops=False, add_timepoints=True, sep=' > '):
+        self.data[["path", "exposure_times"]] = self.data[
+            ["path", "exposure_times"]
+        ].applymap(lambda _: [ch.strip() for ch in _.split(">")])
 
-		self.data = pd.read_csv(os.path.join(os.path.dirname(__file__),'data', data))
-		self.sep = sep
-		self.NULL = '(null)'
-		self.START = '(start)'
-		self.CONV = '(conversion)'
+        for row in self.data.itertuples():
 
-		if not (set(self.data.columns) <= set('path total_conversions total_conversion_value total_null exposure_times'.split())):
-			raise ValueError(f'wrong column names in {data}!')
-		
-		if add_timepoints:
-			self.add_exposure_times(1)
+            clean_path = []
+            clean_exposure_times = []
 
-		if not allow_loops:
-			self.remove_loops()
+            for i, p in enumerate(row.path, 1):
 
-		# we'll work with lists in path and exposure_times from now on
-		self.data[['path', 'exposure_times']] = self.data[['path', 'exposure_times']].applymap(lambda _: [ch.strip() for ch in _.split(self.sep.strip())])
-		
-		# make a sorted list of channel names
-		self.channels = sorted(list({ch for ch in chain.from_iterable(self.data['path'])}))
-		# add some extra channels
-		self.channels_ext = [self.START] + self.channels + [self.CONV, self.NULL]
-		# make dictionary mapping a channel name to it's index
-		self.c2i = {c: i for i, c in enumerate(self.channels_ext)}
-		# and reverse
-		self.i2c = {i: c for c, i in self.c2i.items()}
+                if i == 1:
+                    clean_path.append(p)
+                    clean_exposure_times.append(row.exposure_times[i - 1])
+                else:
+                    if p != clean_path[-1]:
+                        clean_path.append(p)
+                        clean_exposure_times.append(row.exposure_times[i - 1])
 
-		self.removal_effects = defaultdict(float)
-		# touch points by channel
-		self.tps_by_channel = {'c1': ['beta', 'iota', 'gamma'], 
-								'c2': ['alpha', 'delta', 'kappa', 'mi'],
-								'c3': ['epsilon', 'lambda', 'eta', 'theta', 'zeta']}
+            cpath.append(self.sep.join(clean_path))
+            cexposure.append(self.sep.join(clean_exposure_times))
 
-		self.attribution = defaultdict(lambda: defaultdict(float))
+        self.data_ = pd.concat(
+            [
+                pd.DataFrame({"path": cpath}),
+                self.data[
+                    [
+                        c
+                        for c in self.data.columns
+                        if c not in "path exposure_times".split()
+                    ]
+                ],
+                pd.DataFrame({"exposure_times": cexposure}),
+            ],
+            axis=1,
+        )
 
-	def __repr__(self):
+        _ = (
+            self.data_[[c for c in self.data.columns if c != "exposure_times"]]
+            .groupby("path")
+            .sum()
+            .reset_index()
+        )
 
-		return f'{self.__class__.__name__} with {len(self.channels)} channels: {", ".join(self.channels)}'
+        self.data = _.join(
+            self.data_[["path", "exposure_times"]].set_index("path"),
+            on="path",
+            how="inner",
+        ).drop_duplicates(["path"])
 
-	def add_exposure_times(self, dt=None):
+        return self
 
-		"""
-		generate synthetic exposure times; if dt is specified, the exposures will be dt=1 sec away from one another, otherwise
-		we'll generate time spans randomly
+    def normalize_dict(self, d: Dict = None):
+        """
+        returns a value-normalized version of dictionary d
+        """
+        sum_all_values = sum(d.values())
 
-		- the times are of the form 2018-11-26T03:54:26.532091+00:00
-		"""
+        for _ in d:
+            d[_] = round(d[_] / sum_all_values, 6)
 
-		if 'exposure_times' in self.data.columns:
-			return self
+        return d
 
-		ts = []    # this will be a list of time instant lists one per path 
+    @show_time
+    def linear(self, share: str = "same", normalize: bool = True):
 
-		if dt:
+        """
+        either give exactly the same share of conversions to each visited channel (option share=same) or
+        distribute the shares proportionally, i.e. if a channel 1 appears 2 times on the path and channel 2 once
+        then channel 1 will receive double credit
 
-			_t0 = arrow.utcnow()
+        note: to obtain the same result as ChannelAttbribution produces for the test data set, you need to
 
-			self.data['path'].str.split('>') \
-				.apply(lambda _: [ch.strip() for ch in _]) \
-				.apply(lambda lst: ts.append(self.sep.join([r.format('YYYY-MM-DD HH:mm:ss') 
-									for r in arrow.Arrow.range('second', _t0, _t0.shift(seconds=+(len(lst) - 1)))])))
+                - select share=proportional
+                - allow loops - use the data set as is without any modifications
+        """
 
-		self.data['exposure_times'] = ts
+        if share not in "same proportional".split():
+            raise ValueError("share parameter must be either *same* or *proportional*!")
 
-		return self
+        self.linear = defaultdict(float)
 
-	@show_time
-	def remove_loops(self):
+        for row in self.data.itertuples():
 
-		"""
-		remove transitions from a channel directly to itself, e.g. a > a
-		"""
+            if row.total_conversions:
 
-		cpath = []
-		cexposure = []
+                if share == "same":
 
-		self.data[['path', 'exposure_times']] = self.data[['path', 'exposure_times']].applymap(lambda _: [ch.strip() for ch in _.split('>')]) 
+                    n = len(
+                        set(row.path)
+                    )  # number of unique channels visited during the journey
+                    s = (
+                        row.total_conversions / n
+                    )  # each channel is getting an equal share of conversions
 
-		for row in self.data.itertuples():
+                    for c in set(row.path):
+                        self.linear[c] += s
 
-			clean_path = []
-			clean_exposure_times = []
+                elif share == "proportional":
 
-			for i, p in enumerate(row.path, 1):
+                    c_counts = Counter(
+                        row.path
+                    )  # count how many times channels appear on this path
+                    tot_appearances = sum(c_counts.values())
 
-				if i == 1:
-					clean_path.append(p)
-					clean_exposure_times.append(row.exposure_times[i-1])
-				else:
-					if p != clean_path[-1]:
-						clean_path.append(p)
-						clean_exposure_times.append(row.exposure_times[i-1])
+                    c_shares = defaultdict(float)
 
-			cpath.append(self.sep.join(clean_path))
-			cexposure.append(self.sep.join(clean_exposure_times))
+                    for c in c_counts:
 
-		self.data_ = pd.concat([pd.DataFrame({'path': cpath}), 
-								self.data[[c for c in self.data.columns if c not in 'path exposure_times'.split()]],
-								pd.DataFrame({'exposure_times': cexposure})], axis=1)
+                        c_shares[c] = c_counts[c] / tot_appearances
 
-		_ = self.data_[[c for c in self.data.columns if c != 'exposure_times']].groupby('path').sum().reset_index()
+                    for c in set(row.path):
 
-		self.data = _.join(self.data_[['path', 'exposure_times']].set_index('path'), 
-											on='path', how='inner').drop_duplicates(['path'])
+                        self.linear[c] += row.total_conversions * c_shares[c]
 
-		return self
+        if normalize:
+            self.linear = self.normalize_dict(self.linear)
 
-	def normalize_dict(self, d):
-		"""
-		returns a value-normalized version of dictionary d
-		"""
-		sum_all_values = sum(d.values())
+        self.attribution["linear"] = self.linear
 
-		for _ in d:
-			d[_] = round(d[_]/sum_all_values, 6)
+        return self
 
-		return d
+    @show_time
+    def position_based(self, r=(40, 40), normalize=True):
 
-	@show_time
-	def linear(self, share='same', normalize=True):
+        """
+        give 40% credit to the first and last channels and divide the rest equally across the remaining channels
+        """
 
-		"""
-		either give exactly the same share of conversions to each visited channel (option share=same) or
-		distribute the shares proportionally, i.e. if a channel 1 appears 2 times on the path and channel 2 once
-		then channel 1 will receive double credit
+        self.position_based = defaultdict(float)
 
-		note: to obtain the same result as ChannelAttbribution produces for the test data set, you need to
+        for row in self.data.itertuples():
 
-			- select share=proportional
-			- allow loops - use the data set as is without any modifications
-		"""
+            if row.total_conversions:
 
-		if share not in 'same proportional'.split():
-			raise ValueError('share parameter must be either *same* or *proportional*!')
+                n = len(set(row.path))
 
-		self.linear = defaultdict(float)
+                if n == 1:
+                    self.position_based[row.path[-1]] += row.total_conversions
+                elif n == 2:
+                    equal_share = row.total_conversions / n
+                    self.position_based[row.path[0]] += equal_share
+                    self.position_based[row.path[-1]] += equal_share
+                else:
+                    self.position_based[row.path[0]] += (
+                        r[0] * row.total_conversions / 100
+                    )
+                    self.position_based[row.path[-1]] += (
+                        r[1] * row.total_conversions / 100
+                    )
 
-		for row in self.data.itertuples():
+                    for c in row.path[1:-1]:
+                        self.position_based[c] += (
+                            (100 - sum(r)) * row.total_conversions / (n - 2) / 100
+                        )
 
-			if row.total_conversions:
+        if normalize:
+            self.position_based = self.normalize_dict(self.position_based)
 
-				if share == 'same':
+        self.attribution["pos_based"] = self.position_based
 
-					n = len(set(row.path))    # number of unique channels visited during the journey
-					s = row.total_conversions/n    # each channel is getting an equal share of conversions
+        return self
 
-					for c in set(row.path):
-						self.linear[c] += s
+    @show_time
+    def time_decay(self, count_direction="left", normalize=True):
 
-				elif share == 'proportional':
+        """
+        time decay - the closer to conversion was exposure to a channel, the more credit this channel gets
 
-					c_counts = Counter(row.path)  # count how many times channels appear on this path
-					tot_appearances = sum(c_counts.values())
+        this can work differently depending how you get timing sorted.
 
-					c_shares = defaultdict(float)
+        example: a > b > c > b > a > c > (conversion)
 
-					for c in c_counts:
+        we can count timing backwards: c the latest, then a, then b (lowest credit) and done. Or we could count left to right, i.e.
+        a first (lowest credit), then b, then c.
 
-						c_shares[c] = c_counts[c]/tot_appearances
+        """
 
-					for c in set(row.path):
+        self.time_decay = defaultdict(float)
 
-						self.linear[c] += row.total_conversions*c_shares[c]
+        if count_direction not in "left right".split():
+            raise ValueError("argument count_direction must be *left* or *right*!")
 
-		if normalize:
-			self.linear = self.normalize_dict(self.linear)
+        for row in self.data.itertuples():
 
-		self.attribution['linear'] = self.linear
+            if row.total_conversions:
 
-		return self
+                channels_by_exp_time = []
 
-	@show_time
-	def position_based(self, r=(40,40), normalize=True):
+                _ = row.path if count_direction == "left" else row.path[::-1]
 
-		"""
-		give 40% credit to the first and last channels and divide the rest equally across the remaining channels
-		"""
+                for c in _:
+                    if c not in channels_by_exp_time:
+                        channels_by_exp_time.append(c)
 
-		self.position_based = defaultdict(float)
+                if count_direction == "right":
+                    channels_by_exp_time = channels_by_exp_time[::-1]
 
-		for row in self.data.itertuples():
+                # first channel gets 1, second 2, etc.
 
-			if row.total_conversions:
+                score_unit = 1.0 / sum(range(1, len(channels_by_exp_time) + 1))
 
-				n = len(set(row.path))
+                for i, c in enumerate(channels_by_exp_time, 1):
+                    self.time_decay[c] += i * score_unit * row.total_conversions
 
-				if n == 1:
-					self.position_based[row.path[-1]] += row.total_conversions
-				elif n == 2:
-					equal_share  = row.total_conversions/n
-					self.position_based[row.path[0]] += equal_share
-					self.position_based[row.path[-1]] += equal_share
-				else:
-					self.position_based[row.path[0]] += r[0]*row.total_conversions/100
-					self.position_based[row.path[-1]] += r[1]*row.total_conversions/100
+        if normalize:
+            self.time_decay = self.normalize_dict(self.time_decay)
 
-					for c in row.path[1:-1]:
-						self.position_based[c] += (100 - sum(r))*row.total_conversions/(n - 2)/100
+        self.attribution["time_decay"] = self.time_decay
 
-		if normalize:
-			self.position_based = self.normalize_dict(self.position_based)
+        return self
 
-		self.attribution['pos_based'] = self.position_based
+    @show_time
+    def first_touch(self, normalize=True):
 
-		return self
+        first_touch = defaultdict(int)
 
+        for c in self.channels:
 
-	@show_time
-	def time_decay(self, count_direction='left', normalize=True):
+            # total conversions for all paths where the first channel was c
+            first_touch[c] = self.data.loc[
+                self.data["path"].apply(lambda _: _[0] == c), "total_conversions"
+            ].sum()
 
-		"""
-		time decay - the closer to conversion was exposure to a channel, the more credit this channel gets
+        if normalize:
+            first_touch = self.normalize_dict(first_touch)
 
-		this can work differently depending how you get timing sorted. 
+        self.attribution["first_touch"] = first_touch
 
-		example: a > b > c > b > a > c > (conversion)
-	
-		we can count timing backwards: c the latest, then a, then b (lowest credit) and done. Or we could count left to right, i.e.
-		a first (lowest credit), then b, then c. 
+        return self
 
-		"""
+    @show_time
+    def last_touch(self, normalize=True):
 
-		self.time_decay = defaultdict(float)
+        last_touch = defaultdict(int)
 
-		if count_direction not in 'left right'.split():
-			raise ValueError('argument count_direction must be *left* or *right*!')
+        for c in self.channels:
 
-		for row in self.data.itertuples():
+            # total conversions for all paths where the last channel was c
+            last_touch[c] = self.data.loc[
+                self.data["path"].apply(lambda _: _[-1] == c), "total_conversions"
+            ].sum()
 
-			if row.total_conversions:
+        if normalize:
+            last_touch = self.normalize_dict(last_touch)
 
-				channels_by_exp_time = []
+        self.attribution["last_touch"] = last_touch
 
-				_ = row.path if count_direction == 'left' else row.path[::-1]
+        return self
 
-				for c in _:
-					if c not in channels_by_exp_time:
-						channels_by_exp_time.append(c)
+    def pairs(self, lst):
 
-				if count_direction == 'right':
-					channels_by_exp_time = channels_by_exp_time[::-1]
+        it1, it2 = tee(lst)
+        next(it2, None)
 
-				# first channel gets 1, second 2, etc.
+        return zip(it1, it2)
 
-				score_unit = 1./sum(range(1, len(channels_by_exp_time) + 1))
+    def count_pairs(self):
 
-				for i, c in enumerate(channels_by_exp_time, 1):
-					self.time_decay[c] += i*score_unit*row.total_conversions
+        """
+        count how many times channel pairs appear on all recorded customer journey paths
+        """
 
-		if normalize:
-			self.time_decay = self.normalize_dict(self.time_decay)
+        c = defaultdict(int)
 
-		self.attribution['time_decay'] = self.time_decay
+        for row in self.data.itertuples():
 
-		return self
+            for ch_pair in self.pairs([self.START] + row.path):
+                c[ch_pair] += row.total_conversions + row.total_null
 
-	@show_time
-	def first_touch(self, normalize=True):
+            c[(row.path[-1], self.NULL)] += row.total_null
+            c[(row.path[-1], self.CONV)] += row.total_conversions
 
-		first_touch = defaultdict(int)
+        return c
 
-		for c in self.channels:
+    def ordered_tuple(self, t):
 
-			# total conversions for all paths where the first channel was c
-			first_touch[c] = self.data.loc[self.data['path'].apply(lambda _: _[0] == c), 'total_conversions'].sum()
+        """
+        return tuple t ordered
+        """
 
-		if normalize:
-			first_touch = self.normalize_dict(first_touch)
+        sort = lambda t: tuple(sorted(list(t)))
 
-		self.attribution['first_touch'] = first_touch
+        return (
+            (t[0],) + sort(t[1:]) if (t[0] == self.START) and (len(t) > 1) else sort(t)
+        )
 
-		return self
+    def trans_matrix(self):
 
-	@show_time
-	def last_touch(self, normalize=True):
+        """
+        calculate transition matrix which will actually be a dictionary mapping
+        a pair (a, b) to the probability of moving from a to b, e.g. T[(a, b)] = 0.5
+        """
 
-		last_touch = defaultdict(int)
+        tr = defaultdict(float)
 
-		for c in self.channels:
+        outs = defaultdict(int)
 
-			# total conversions for all paths where the last channel was c
-			last_touch[c] = self.data.loc[self.data['path'].apply(lambda _: _[-1] == c), 'total_conversions'].sum()
+        # here pairs are unordered
+        pair_counts = self.count_pairs()
 
-		if normalize:
-			last_touch = self.normalize_dict(last_touch)
+        for pair in pair_counts:
 
-		self.attribution['last_touch'] = last_touch
+            outs[pair[0]] += pair_counts[pair]
 
-		return self
+        for pair in pair_counts:
 
-	def pairs(self, lst):
+            tr[pair] = pair_counts[pair] / outs[pair[0]]
 
-		it1, it2 = tee(lst)
-		next(it2, None)
+        return tr
 
-		return zip(it1, it2)
+    @show_time
+    def simulate_path(self, trans_mat, drop_channel=None, n=int(1e6)):
 
-	def count_pairs(self):
+        """
+        generate n random user journeys and see where these users end up - converted or not;
+        drop_channel is a channel to exclude from journeys if specified
+        """
 
-		"""
-		count how many times channel pairs appear on all recorded customer journey paths
-		"""
+        outcome_counts = defaultdict(int)
 
-		c = defaultdict(int)
+        idx0 = self.c2i[self.START]
+        null_idx = self.c2i[self.NULL]
+        conv_idx = self.c2i[self.CONV]
 
-		for row in self.data.itertuples():
+        drop_idx = self.c2i[drop_channel] if drop_channel else null_idx
 
-			for ch_pair in self.pairs([self.START] + row.path):
-				c[ch_pair] += (row.total_conversions + row.total_null)
+        for _ in range(n):
 
-			c[(row.path[-1], self.NULL)] += row.total_null
-			c[(row.path[-1], self.CONV)] += row.total_conversions
+            stop_flag = None
 
-		return c
+            while not stop_flag:
 
-	def ordered_tuple(self, t):
+                probs = [
+                    trans_mat.get((self.i2c[idx0], self.i2c[i]), 0)
+                    for i in range(len(self.channels_ext))
+                ]
 
-		"""
-		return tuple t ordered 
-		"""
+                # index of the channel where user goes next
+                idx1 = np.random.choice(
+                    [self.c2i[c] for c in self.channels_ext], p=probs, replace=False
+                )
 
-		sort = lambda t: tuple(sorted(list(t)))
+                if idx1 == conv_idx:
+                    outcome_counts[self.CONV] += 1
+                    stop_flag = True
+                elif idx1 in {null_idx, drop_idx}:
+                    outcome_counts[self.NULL] += 1
+                    stop_flag = True
+                else:
+                    idx0 = idx1
 
-		return (t[0],) + sort(t[1:]) if (t[0] == self.START) and (len(t) > 1) else sort(t)
+        return outcome_counts
 
+    def prob_convert(self, trans_mat, drop=None):
 
-	def trans_matrix(self):
+        _d = self.data[
+            self.data["path"].apply(lambda x: drop not in x)
+            & (self.data["total_conversions"] > 0)
+        ]
 
-		"""
-		calculate transition matrix which will actually be a dictionary mapping 
-		a pair (a, b) to the probability of moving from a to b, e.g. T[(a, b)] = 0.5
-		"""
+        p = 0
 
-		tr = defaultdict(float)
+        for row in _d.itertuples():
 
-		outs = defaultdict(int)
+            pr_this_path = []
 
-		# here pairs are unordered
-		pair_counts = self.count_pairs()
+            for t in self.pairs([self.START] + row.path + [self.CONV]):
 
-		for pair in pair_counts:
+                pr_this_path.append(trans_mat.get(t, 0))
 
-			outs[pair[0]] += pair_counts[pair]
+            p += reduce(mul, pr_this_path)
 
-		for pair in pair_counts:
+        return p
 
-			tr[pair] = pair_counts[pair]/outs[pair[0]]
+    @show_time
+    def markov(self, sim=False, normalize=True):
 
-		return tr
+        markov = defaultdict(float)
 
-	@show_time
-	def simulate_path(self, trans_mat, drop_channel=None, n=int(1e6)):
+        # calculate the transition matrix
+        tr = self.trans_matrix()
 
-		"""
-		generate n random user journeys and see where these users end up - converted or not;
-		drop_channel is a channel to exclude from journeys if specified
-		"""
+        if not sim:
 
-		outcome_counts = defaultdict(int)
+            p_conv = self.prob_convert(trans_mat=tr)
 
-		idx0 = self.c2i[self.START]
-		null_idx = self.c2i[self.NULL]
-		conv_idx = self.c2i[self.CONV]
+            for c in self.channels:
+                markov[c] = (p_conv - self.prob_convert(trans_mat=tr, drop=c)) / p_conv
+        else:
 
-		drop_idx = self.c2i[drop_channel] if drop_channel else null_idx
+            outcomes = defaultdict(lambda: defaultdict(float))
+            # get conversion counts when all chennels are in place
+            outcomes["full"] = self.simulate_path(trans_mat=tr, drop_channel=None)
 
-		for _ in range(n):
+            for c in self.channels:
 
-			stop_flag = None
+                outcomes[c] = self.simulate_path(trans_mat=tr, drop_channel=c)
+                # removal effect for channel c
+                markov[c] = (
+                    outcomes["full"][self.CONV] - outcomes[c][self.CONV]
+                ) / outcomes["full"][self.CONV]
 
-			while not stop_flag:
+        if normalize:
+            markov = self.normalize_dict(markov)
 
-				probs = [trans_mat.get((self.i2c[idx0], self.i2c[i]), 0) for i in range(len(self.channels_ext))]
+        self.attribution["markov"] = markov
 
-				# index of the channel where user goes next
-				idx1 = np.random.choice([self.c2i[c] for c in self.channels_ext], p=probs, replace=False)
+        return self
 
-				if idx1 == conv_idx:
-					outcome_counts[self.CONV] += 1
-					stop_flag = True
-				elif idx1 in {null_idx, drop_idx}:
-					outcome_counts[self.NULL] += 1
-					stop_flag = True
-				else:
-					idx0 = idx1
+    @show_time
+    def shao(self, normalize=True):
 
-		return outcome_counts
+        """
+        probabilistic model by Shao and Li (supposed to be equivalent to Shapley); explanation in the original paper may seem rather unclear but
+        this https://stats.stackexchange.com/questions/255312/multi-channel-attribution-modelling-using-a-simple-probabilistic-model
+        is definitely helpful
+        """
 
-	def prob_convert(self, trans_mat, drop=None):
+        r = defaultdict(lambda: defaultdict(float))
 
-		_d = self.data[self.data['path'].apply(lambda x: drop not in x) & (self.data['total_conversions'] > 0)]
+        # count user conversions and nulls for each visited channel and channel pair
 
-		p = 0
+        for row in self.data.itertuples():
 
-		for row in _d.itertuples():
+            for n in range(1, 3):
 
-			pr_this_path = []
+                # # combinations('ABCD', 2) --> AB AC AD BC BD CD
 
-			for t in self.pairs([self.START] + row.path + [self.CONV]):
+                for ch in combinations(set(row.path), n):
 
-				pr_this_path.append(trans_mat.get(t, 0))
+                    t = self.ordered_tuple(ch)
 
-			p += reduce(mul, pr_this_path)
+                    r[t][self.CONV] += row.total_conversions
+                    r[t][self.NULL] += row.total_null
 
-		return p
+        for _ in r:
+            r[_]["conv_prob"] = r[_][self.CONV] / (r[_][self.CONV] + r[_][self.NULL])
 
-	@show_time
-	def markov(self, sim=False, normalize=True):
+        # calculate channel contributions
 
-		markov = defaultdict(float)
+        self.C = defaultdict(float)
 
-		# calculate the transition matrix
-		tr = self.trans_matrix()
+        for row in self.data.itertuples():
 
-		if not sim:
-			
-			p_conv = self.prob_convert(trans_mat=tr)
+            for ch_i in set(row.path):
 
-			for c in self.channels:
-				markov[c] = (p_conv - self.prob_convert(trans_mat=tr, drop=c))/p_conv
-		else:
+                if row.total_conversions:
 
-			outcomes = defaultdict(lambda: defaultdict(float))
-			# get conversion counts when all chennels are in place
-			outcomes['full'] = self.simulate_path(trans_mat=tr, drop_channel=None)
+                    pc = 0  # contribution for current path
 
-			for c in self.channels:
+                    other_channels = set(row.path) - {ch_i}
 
-				outcomes[c] = self.simulate_path(trans_mat=tr, drop_channel=c)
-				# removal effect for channel c
-				markov[c] = (outcomes['full'][self.CONV] - outcomes[c][self.CONV])/outcomes['full'][self.CONV]
+                    k = 2 * len(other_channels) if other_channels else 1
 
-		if normalize:
-			markov = self.normalize_dict(markov)
+                    for ch_j in other_channels:
 
-		self.attribution['markov'] = markov
+                        pc += (
+                            r[self.ordered_tuple((ch_i, ch_j))]["conv_prob"]
+                            - r[(ch_i,)]["conv_prob"]
+                            - r[(ch_j,)]["conv_prob"]
+                        )
 
+                    pc = r[(ch_i,)]["conv_prob"] + pc / k
 
-		return self
+                    self.C[ch_i] += row.total_conversions * pc
 
-	@show_time
-	def shao(self, normalize=True):
+        if normalize:
+            self.C = self.normalize_dict(self.C)
 
-		"""
-		probabilistic model by Shao and Li (supposed to be equivalent to Shapley); explanation in the original paper may seem rather unclear but
-		this https://stats.stackexchange.com/questions/255312/multi-channel-attribution-modelling-using-a-simple-probabilistic-model 
-		is definitely helpful
-		"""
+        self.attribution["shao"] = self.C
 
-		r = defaultdict(lambda: defaultdict(float))
+        return self
 
-		# count user conversions and nulls for each visited channel and channel pair
+    def get_generated_conversions(self, max_subset_size=3):
 
-		for row in self.data.itertuples():
+        self.cc = defaultdict(lambda: defaultdict(float))
 
-			for n in range(1, 3):
+        for ch_list, convs, nulls in zip(
+            self.data["path"], self.data["total_conversions"], self.data["total_null"]
+        ):
 
-				# # combinations('ABCD', 2) --> AB AC AD BC BD CD
-				
-				for ch in combinations(set(row.path), n):
-					
-					t = self.ordered_tuple(ch)
+            # only look at journeys with conversions
+            for n in range(1, max_subset_size + 1):
 
-					r[t][self.CONV] += row.total_conversions
-					r[t][self.NULL] += row.total_null
+                for tup in combinations(set(ch_list), n):
 
-		for _ in r:
-			r[_]['conv_prob'] = r[_][self.CONV]/(r[_][self.CONV] + r[_][self.NULL])
+                    tup_ = self.ordered_tuple(tup)
 
-		# calculate channel contributions
+                    self.cc[tup_][self.CONV] += convs
+                    self.cc[tup_][self.NULL] += nulls
 
-		self.C = defaultdict(float)
+        return self
 
-		for row in self.data.itertuples():
+    def v(self, coalition):
 
-			for ch_i in set(row.path):
+        """
+        total number of conversions generated by all subsets of the coalition;
+        coalition is a tuple of channels
+        """
 
-				if row.total_conversions:
+        s = len(coalition)
 
-					pc = 0    # contribution for current path
+        total_convs = 0
 
-					other_channels = set(row.path) - {ch_i}
+        for n in range(1, s + 1):
+            for tup in combinations(coalition, n):
+                tup_ = self.ordered_tuple(tup)
+                total_convs += self.cc[tup_][self.CONV]
 
-					k = 2*len(other_channels) if other_channels else 1 
+        return total_convs
 
-					for ch_j in other_channels:
+    def w(self, s, n):
 
-						pc += (r[self.ordered_tuple((ch_i, ch_j))]['conv_prob'] - 
-														r[(ch_i,)]['conv_prob'] - 
-														r[(ch_j,)]['conv_prob'])
+        return (
+            np.math.factorial(s) * (np.math.factorial(n - s - 1)) / np.math.factorial(n)
+        )
 
-					pc = r[(ch_i,)]['conv_prob']  + pc/k
+    @show_time
+    def shapley(self, max_coalition_size=2, normalize=True):
 
-					self.C[ch_i] += row.total_conversions*pc
+        """
+        Shapley model; channels are players, the characteristic function maps a coalition A to the
+        the total number of conversions generated by all the subsets of the coalition
 
+        see https://medium.com/data-from-the-trenches/marketing-attribution-e7fa7ae9e919
+        """
 
-		if normalize:
-			self.C = self.normalize_dict(self.C)
+        self.get_generated_conversions(max_subset_size=3)
 
-		self.attribution['shao'] = self.C
+        self.phi = defaultdict(float)
 
-		return self
+        for ch in self.channels:
+            # all subsets of channels that do NOT include ch
+            for n in range(1, max_coalition_size + 1):
+                for tup in combinations(set(self.channels) - {ch}, n):
+                    self.phi[ch] += (self.v(tup + (ch,)) - self.v(tup)) * self.w(
+                        len(tup), len(self.channels)
+                    )
 
-	def get_generated_conversions(self, max_subset_size=3):
+        if normalize:
+            self.phi = self.normalize_dict(self.phi)
 
-		self.cc = defaultdict(lambda: defaultdict(float))
+        self.attribution["shapley"] = self.phi
 
-		for ch_list, convs, nulls in zip(self.data['path'], 
-											self.data['total_conversions'], 
-												self.data['total_null']):
+        return self
 
-			# only look at journeys with conversions
-			for n in range(1, max_subset_size + 1):
+    @show_time
+    def logistic_regression(
+        self, test_size=0.25, ps=0.5, pc=0.5, normalize=True, n=2000
+    ):
 
-				for tup in combinations(set(ch_list), n):
+        """
+        test_size is the proportion of data set to use as the test set
+        ps is the proportion of rows to sample
+        pc is the proportion of columns to sample
+        n is the number of iterations
+        """
 
-					tup_ = self.ordered_tuple(tup)
+        lr = defaultdict(float)
 
-					self.cc[tup_][self.CONV] += convs
-					self.cc[tup_][self.NULL] += nulls
+        # expand the original data set into a feature matrix
+        lists_ = []
+        flags_ = []
 
-		return self
+        for i, row in enumerate(self.data.itertuples()):
 
-	def v(self, coalition):
-		
-		"""
-		total number of conversions generated by all subsets of the coalition;
-		coalition is a tuple of channels
-		"""
+            for _ in range(row.total_conversions):
 
-		s = len(coalition)
+                lists_.append({c: 1 for c in row.path})
+                flags_.append(1)
 
-		total_convs = 0
+            for _ in range(row.total_null):
 
-		for n in range(1, s+1):
-			for tup in combinations(coalition, n):
-				tup_ = self.ordered_tuple(tup)
-				total_convs += self.cc[tup_][self.CONV]
+                lists_.append({c: 1 for c in row.path})
+                flags_.append(0)
 
-		return total_convs
+        data_ = pd.concat(
+            [pd.DataFrame(lists_).fillna(0), pd.DataFrame({"conv": flags_})], axis=1
+        ).sample(frac=1.0)
 
-	def w(self, s, n):
-		
-		return np.math.factorial(s)*(np.math.factorial(n - s -1))/np.math.factorial(n)
+        for _ in range(1, n + 1):
 
-	@show_time
-	def shapley(self, max_coalition_size=2, normalize=True):
+            dd = pd.concat(
+                [
+                    data_[data_["conv"] == 1].sample(frac=0.5),
+                    data_[data_["conv"] == 0].sample(frac=0.5),
+                ]
+            )
 
-		"""
-		Shapley model; channels are players, the characteristic function maps a coalition A to the 
-		the total number of conversions generated by all the subsets of the coalition
+            # randomly sample features (channels) and rows (journeys)
+            dd = dd.sample(frac=ps)
 
-		see https://medium.com/data-from-the-trenches/marketing-attribution-e7fa7ae9e919
-		"""
+            dd = pd.concat(
+                [dd.drop("conv", axis=1).sample(frac=pc, axis=1), dd["conv"]], axis=1
+            )
 
-		self.get_generated_conversions(max_subset_size=3)
+            # split into training/test set
+            X_train, X_test, y_train, y_test = train_test_split(
+                dd.drop("conv", axis=1),
+                dd["conv"],
+                test_size=test_size,
+                random_state=36,
+                stratify=dd["conv"],
+            )
 
-		self.phi = defaultdict(float)
+            # fit logistic regression classifier
+            clf = LogisticRegression(
+                random_state=32, solver="lbfgs", fit_intercept=False
+            ).fit(X_train, y_train)
 
-		for ch in self.channels:
-			# all subsets of channels that do NOT include ch
-			for n in range(1, max_coalition_size + 1):
-				for tup in combinations(set(self.channels) - {ch}, n):
-					self.phi[ch] += (self.v(tup + (ch,)) - self.v(tup))*self.w(len(tup), len(self.channels))
+            # predict conversion labels for the test set
+            yh = clf.predict(X_test)
 
-		if normalize:
-			self.phi = self.normalize_dict(self.phi)
+            minc = min(clf.coef_[0])
+            maxc = max(clf.coef_[0])
 
-		self.attribution['shapley'] = self.phi
+            for c, coef in zip(X_train.columns, [k * k for k in clf.coef_[0]]):
+                lr[c] += coef / n
 
-		return self
+        if normalize:
+            lr = self.normalize_dict(lr)
 
-	@show_time
-	def logistic_regression(self, test_size=0.25, ps=0.5, pc=0.5, normalize=True, n=2000):
+        self.attribution["linreg"] = lr
 
-		"""
-		test_size is the proportion of data set to use as the test set
-		ps is the proportion of rows to sample
-		pc is the proportion of columns to sample
-		n is the number of iterations
-		"""
+        return self
 
-		lr = defaultdict(float)
+    def show(self):
 
-		# expand the original data set into a feature matrix
-		lists_ = []
-		flags_ = []
+        """
+        show simulation results
+        """
 
-		for i, row in enumerate(self.data.itertuples()):
+        res = pd.DataFrame.from_dict(self.attribution)
 
-			for _ in range(row.total_conversions):
+        print(res)
 
-				lists_.append({c: 1 for c in row.path})
-				flags_.append(1)
+    def rois(self, attrib, spend, cv):
 
-			for _ in range(row.total_null):
+        """
+        calculate ROIs as suggested in paper
+        Geyik et al (2014) - Multi-Touch Attribution Based Budget Allocation in Online Advertising
 
-				lists_.append({c: 1 for c in row.path})
-				flags_.append(0)
+        attrib is a dictionary of attributions per touch point
+        spend is a dictionary of spent dollars per channel
+        cv is the conversion value (in dollars)
+        """
 
-		data_ = pd.concat([pd.DataFrame(lists_).fillna(0), 
-						   pd.DataFrame({'conv': flags_})], axis=1).sample(frac=1.0)
+        roi = defaultdict(float)
 
-		for _ in range(1, n + 1):
+        for c in self.tps_by_channel:
+            roi[c] = sum([attrib[tp] for tp in self.tps_by_channel[c]]) * cv / spend[c]
 
-			dd = pd.concat([data_[data_['conv'] == 1].sample(frac=0.5), 
-							data_[data_['conv'] == 0].sample(frac=0.5)])
+        return roi
 
-			# randomly sample features (channels) and rows (journeys)
-			dd = dd.sample(frac=ps)
+    def pi(self, path, exposure_times, conv_flag, beta_by_channel, omega_by_channel):
 
-			dd = pd.concat([dd.drop('conv', axis=1).sample(frac=pc, axis=1), dd['conv']], axis=1)
-	
-			# split into training/test set
-			X_train, X_test, y_train, y_test = train_test_split(dd.drop('conv', axis=1), dd['conv'], 
-														test_size=test_size, random_state=36, stratify=dd['conv'])
+        """
 
-			# fit logistic regression classifier
-			clf = LogisticRegression(random_state=32, solver='lbfgs', fit_intercept=False).fit(X_train, y_train)
-	
-			# predict conversion labels for the test set
-			yh = clf.predict(X_test)
+        calculate contribution of channel i to conversion of journey (user) u - (p_i^u) in the paper
 
-			minc = min(clf.coef_[0])
-			maxc = max(clf.coef_[0])
+         - path is a list of states that includes (start) but EXCLUDES (null) or (conversion)
+         - exposure_times is list of exposure times
 
-			for c, coef in zip(X_train.columns, [k*k for k in clf.coef_[0]]):
-				lr[c] += coef/n
+        """
 
-		if normalize:
-			lr = self.normalize_dict(lr)
+        p = {c: 0 for c in path}  # contributions by channel
 
-		self.attribution['linreg'] = lr
+        # all contributions are zero if no conversion
+        if not conv_flag:
+            return p
 
-		return self
+        dts = [
+            (arrow.get(exposure_times[-1]) - arrow.get(t)).seconds
+            for t in exposure_times
+        ]
 
-	def show(self):
+        _ = defaultdict(float)
 
-		"""
-		show simulation results
-		"""
+        for c, dt in zip(path, dts):
+            _[c] += (
+                beta_by_channel[c]
+                * omega_by_channel[c]
+                * np.exp(-omega_by_channel[c] * dt)
+            )
 
-		res = pd.DataFrame.from_dict(self.attribution)
+        for c in _:
+            p[c] = _[c] / sum(_.values())
 
-		print(res)
+        return p
 
-	def rois(self, attrib, spend, cv):
+    def update_coefs(self, beta, omega):
 
-		"""
-		calculate ROIs as suggested in paper
-		Geyik et al (2014) - Multi-Touch Attribution Based Budget Allocation in Online Advertising
+        """
+        return updated beta and omega
+        """
 
-		attrib is a dictionary of attributions per touch point
-		spend is a dictionary of spent dollars per channel 
-		cv is the conversion value (in dollars)
-		"""	
+        delta = 1e-3
 
-		roi = defaultdict(float)
+        beta_num = defaultdict(float)
+        beta_den = defaultdict(float)
+        omega_den = defaultdict(float)
 
-		for c in self.tps_by_channel:
-			roi[c] = sum([attrib[tp] for tp in self.tps_by_channel[c]])*cv/spend[c]
+        for u, row in enumerate(self.data.itertuples()):
 
-		return roi
+            p = self.pi(
+                row.path, row.exposure_times, row.total_conversions, beta, omega
+            )
 
-	def pi(self, path, exposure_times, conv_flag, beta_by_channel, omega_by_channel):
+            r = copy.deepcopy(row.path)
 
-		"""
+            dts = [
+                (arrow.get(row.exposure_times[-1]) - arrow.get(t)).seconds
+                for t in row.exposure_times
+            ]
 
-		calculate contribution of channel i to conversion of journey (user) u - (p_i^u) in the paper
+            while r:
 
-		 - path is a list of states that includes (start) but EXCLUDES (null) or (conversion)
-		 - exposure_times is list of exposure times
-		
-		"""
+                # pick channels starting from the last one
+                c = r.pop()
+                dt = dts.pop()
 
-		p = {c: 0 for c in path}    # contributions by channel
+                beta_den[c] += 1.0 - np.exp(-omega[c] * dt)
+                omega_den[c] += p[c] * dt + beta[c] * dt * np.exp(-omega[c] * dt)
 
-		# all contributions are zero if no conversion
-		if not conv_flag:
-			return p
+                beta_num[c] += p[c]
 
-		dts = [(arrow.get(exposure_times[-1]) - arrow.get(t)).seconds for t in exposure_times]
+        # now that we gone through every user, update coefficients for every channel
 
-		_ = defaultdict(float)
+        beta0 = copy.deepcopy(beta)
+        omega0 = copy.deepcopy(omega)
 
-		for c, dt in zip(path, dts):
-			_[c] += beta_by_channel[c]*omega_by_channel[c]*np.exp(-omega_by_channel[c]*dt)
+        df = []
 
-		for c in _:
-			p[c] = _[c]/sum(_.values())
+        for c in self.channels:
 
-		return p
+            beta_num[c] = (beta_num[c] > 1e-6) * beta_num[c]
+            beta_den[c] = (beta_den[c] > 1e-6) * beta_den[c]
+            omega_den[c] = max(omega_den[c], 1e-6)
 
-	def update_coefs(self, beta, omega):
+            if beta_den[c]:
+                beta[c] = beta_num[c] / beta_den[c]
 
-		"""
-		return updated beta and omega
-		"""
+            omega[c] = beta_num[c] / omega_den[c]
 
-		delta = 1e-3
+            df.append(abs(beta[c] - beta0[c]) < delta)
+            df.append(abs(omega[c] - omega0[c]) < delta)
 
-		beta_num = defaultdict(float)
-		beta_den = defaultdict(float)
-		omega_den = defaultdict(float)
+        return (beta, omega, sum(df))
 
-		for u, row in enumerate(self.data.itertuples()):
+    @show_time
+    def additive_hazard(self, epochs=20, normalize=True):
 
-			p = self.pi(row.path, row.exposure_times, row.total_conversions, beta, omega)
+        """
+        additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
+        """
 
-			r = copy.deepcopy(row.path)
+        beta = {c: random.uniform(0.001, 1) for c in self.channels}
+        omega = {c: random.uniform(0.001, 1) for c in self.channels}
 
-			dts = [(arrow.get(row.exposure_times[-1]) - arrow.get(t)).seconds for t in row.exposure_times]
+        for _ in range(epochs):
 
-			while r:
+            beta, omega, h = self.update_coefs(beta, omega)
 
-				# pick channels starting from the last one
-				c = r.pop()
-				dt = dts.pop()
+            if h == 2 * len(self.channels):
+                print(f"converged after {_ + 1} iterations")
+                break
 
-				beta_den[c] += (1.0 - np.exp(-omega[c]*dt))
-				omega_den[c] += (p[c]*dt + beta[c]*dt*np.exp(-omega[c]*dt))
+        # time window: take the max time instant across all journeys that converged
 
-				beta_num[c] += p[c]
-	
-		# now that we gone through every user, update coefficients for every channel
+        additive_hazard = defaultdict(float)
 
-		beta0 = copy.deepcopy(beta)
-		omega0 = copy.deepcopy(omega)
+        for u, row in enumerate(self.data.itertuples()):
 
-		df = []
+            p = self.pi(
+                row.path, row.exposure_times, row.total_conversions, beta, omega
+            )
 
-		for c in self.channels:
-			
-			beta_num[c] = (beta_num[c] > 1e-6)*beta_num[c]
-			beta_den[c] = (beta_den[c] > 1e-6)*beta_den[c]
-			omega_den[c] = max(omega_den[c], 1e-6)
+            for c in p:
+                additive_hazard[c] += p[c]
 
-			if beta_den[c]:
-				beta[c] = beta_num[c]/beta_den[c]
+        if normalize:
+            additive_hazard = self.normalize_dict(additive_hazard)
 
-			omega[c] = beta_num[c]/omega_den[c]
+        self.attribution["add_haz"] = additive_hazard
 
-			df.append(abs(beta[c] - beta0[c]) < delta)
-			df.append(abs(omega[c] - omega0[c]) < delta)
+        return self
 
-		return (beta, omega, sum(df))
 
-	@show_time
-	def additive_hazard(self, epochs=20, normalize=True):
+if __name__ == "__main__":
 
-		"""
-		additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
-		"""
+    mta = MTA(data="data.csv.gz", allow_loops=False)
 
-		beta = {c: random.uniform(0.001,1) for c in self.channels}
-		omega = {c: random.uniform(0.001,1) for c in self.channels}
-
-		for _ in range(epochs):
-
-			beta, omega, h = self.update_coefs(beta, omega)
-
-			if h == 2*len(self.channels):
-				print(f'converged after {_ + 1} iterations')
-				break
-
-		# time window: take the max time instant across all journeys that converged
-
-		additive_hazard = defaultdict(float)
-
-		for u, row in enumerate(self.data.itertuples()):
-
-			p = self.pi(row.path, row.exposure_times, row.total_conversions, beta, omega)
-
-			for c in p:
-				additive_hazard[c] += p[c]
-
-		if normalize:
-			additive_hazard = self.normalize_dict(additive_hazard)
-
-		self.attribution['add_haz'] = additive_hazard
-
-		return self
-
-if __name__ == '__main__':
-
-	mta = MTA(data='data.csv.gz', allow_loops=False)
-
-	(mta
-		.linear(share='proportional') 
-		.time_decay(count_direction='right') 
-		.shapley() 
-		.shao() 
-		.first_touch() 
-		.position_based() 
-		.last_touch() 
-		.markov(sim=False) 
-		.logistic_regression() 
-		.additive_hazard() 
-		.show())
-	
+    (
+        mta.linear(share="proportional")
+        .time_decay(count_direction="right")
+        .shapley()
+        .shao()
+        .first_touch()
+        .position_based()
+        .last_touch()
+        .markov(sim=False)
+        .logistic_regression()
+        .additive_hazard()
+        .show()
+    )
