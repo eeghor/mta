@@ -11,7 +11,7 @@ import json
 import os
 import sys
 from collections.abc import Callable
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Tuple, DefaultDict
 import arrow
 
 from sklearn.linear_model import LogisticRegression
@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 
-def show_time(func: Callable[[], Any]):
+def show_time(func: Callable[..., Any]):
 
     """
     timer decorator
@@ -58,7 +58,7 @@ class MTA:
         allow_loops: bool = False,
         add_timepoints: bool = True,
         sep: str = " > ",
-    ):
+    ) -> None:
 
         self.data = pd.read_csv(os.path.join(os.path.dirname(__file__), "data", data))
         self.sep = sep
@@ -92,9 +92,11 @@ class MTA:
         # add some extra channels
         self.channels_ext = [self.START] + self.channels + [self.CONV, self.NULL]
         # make dictionary mapping a channel name to it's index
-        self.c2i = {c: i for i, c in enumerate(self.channels_ext)}
+        self.channel_name_to_index = {c: i for i, c in enumerate(self.channels_ext)}
         # and reverse
-        self.i2c = {i: c for c, i in self.c2i.items()}
+        self.index_to_channel_name = {
+            i: c for c, i in self.channel_name_to_index.items()
+        }
 
         self.removal_effects = defaultdict(float)
         # touch points by channel
@@ -106,15 +108,15 @@ class MTA:
 
         self.attribution = defaultdict(lambda: defaultdict(float))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
 
         return f'{self.__class__.__name__} with {len(self.channels)} channels: {", ".join(self.channels)}'
 
-    def add_exposure_times(self, dt=None):
+    def add_exposure_times(self, exposure_every_second: bool = True) -> MTA:
 
         """
-        generate synthetic exposure times; if dt is specified, the exposures will be dt=1 sec away from one another, otherwise
-        we'll generate time spans randomly
+        generate synthetic exposure times; if exposure_every_second is True, the exposures will be
+        1 sec away from one another, otherwise we'll generate time spans randomly
 
         - the times are of the form 2018-11-26T03:54:26.532091+00:00
         """
@@ -124,7 +126,7 @@ class MTA:
 
         ts = []  # this will be a list of time instant lists one per path
 
-        if dt:
+        if exposure_every_second:
 
             _t0 = arrow.utcnow()
 
@@ -148,7 +150,7 @@ class MTA:
         return self
 
     @show_time
-    def remove_loops(self):
+    def remove_loops(self) -> MTA:
 
         """
         remove transitions from a channel directly to itself, e.g. a > a
@@ -209,19 +211,19 @@ class MTA:
 
         return self
 
-    def normalize_dict(self, d: Dict = None):
+    def normalize_dict(self, d: Dict = None, decimal_digits: float = 6) -> Dict:
         """
         returns a value-normalized version of dictionary d
         """
         sum_all_values = sum(d.values())
 
         for _ in d:
-            d[_] = round(d[_] / sum_all_values, 6)
+            d[_] = round(d[_] / sum_all_values, decimal_digits)
 
         return d
 
     @show_time
-    def linear(self, share: str = "same", normalize: bool = True):
+    def linear(self, share: str = "same", normalize: bool = True) -> MTA:
 
         """
         either give exactly the same share of conversions to each visited channel (option share=same) or
@@ -280,7 +282,9 @@ class MTA:
         return self
 
     @show_time
-    def position_based(self, r=(40, 40), normalize=True):
+    def position_based(
+        self, r: Tuple[float, float] = (40, 40), normalize: bool = True
+    ) -> MTA:
 
         """
         give 40% credit to the first and last channels and divide the rest equally across the remaining channels
@@ -321,7 +325,7 @@ class MTA:
         return self
 
     @show_time
-    def time_decay(self, count_direction="left", normalize=True):
+    def time_decay(self, count_direction: str = "left", normalize: bool = True) -> MTA:
 
         """
         time decay - the closer to conversion was exposure to a channel, the more credit this channel gets
@@ -370,7 +374,7 @@ class MTA:
         return self
 
     @show_time
-    def first_touch(self, normalize=True):
+    def first_touch(self, normalize: bool = True) -> MTA:
 
         first_touch = defaultdict(int)
 
@@ -389,7 +393,7 @@ class MTA:
         return self
 
     @show_time
-    def last_touch(self, normalize=True):
+    def last_touch(self, normalize: bool = True) -> MTA:
 
         last_touch = defaultdict(int)
 
@@ -407,14 +411,14 @@ class MTA:
 
         return self
 
-    def pairs(self, lst):
+    def pairs(self, lst: List[Any]):
 
         it1, it2 = tee(lst)
         next(it2, None)
 
         return zip(it1, it2)
 
-    def count_pairs(self):
+    def count_pairs(self) -> DefaultDict[float]:
 
         """
         count how many times channel pairs appear on all recorded customer journey paths
@@ -432,7 +436,7 @@ class MTA:
 
         return c
 
-    def ordered_tuple(self, t):
+    def ordered_tuple(self, t: Tuple[Any, Any]) -> Tuple[Any, Any]:
 
         """
         return tuple t ordered
@@ -444,7 +448,7 @@ class MTA:
             (t[0],) + sort(t[1:]) if (t[0] == self.START) and (len(t) > 1) else sort(t)
         )
 
-    def trans_matrix(self):
+    def trans_matrix(self) -> DefaultDict[float]:
 
         """
         calculate transition matrix which will actually be a dictionary mapping
@@ -469,7 +473,9 @@ class MTA:
         return tr
 
     @show_time
-    def simulate_path(self, trans_mat, drop_channel=None, n=int(1e6)):
+    def simulate_path(
+        self, trans_mat: Dict[Any, Any], drop_channel: bool = None, n: float = int(1e6)
+    ) -> DefaultDict[float]:
 
         """
         generate n random user journeys and see where these users end up - converted or not;
@@ -478,11 +484,13 @@ class MTA:
 
         outcome_counts = defaultdict(int)
 
-        idx0 = self.c2i[self.START]
-        null_idx = self.c2i[self.NULL]
-        conv_idx = self.c2i[self.CONV]
+        idx0 = self.channel_name_to_index[self.START]
+        null_idx = self.channel_name_to_index[self.NULL]
+        conv_idx = self.channel_name_to_index[self.CONV]
 
-        drop_idx = self.c2i[drop_channel] if drop_channel else null_idx
+        drop_idx = (
+            self.channel_name_to_index[drop_channel] if drop_channel else null_idx
+        )
 
         for _ in range(n):
 
@@ -491,13 +499,21 @@ class MTA:
             while not stop_flag:
 
                 probs = [
-                    trans_mat.get((self.i2c[idx0], self.i2c[i]), 0)
+                    trans_mat.get(
+                        (
+                            self.index_to_channel_name[idx0],
+                            self.index_to_channel_name[i],
+                        ),
+                        0,
+                    )
                     for i in range(len(self.channels_ext))
                 ]
 
                 # index of the channel where user goes next
                 idx1 = np.random.choice(
-                    [self.c2i[c] for c in self.channels_ext], p=probs, replace=False
+                    [self.channel_name_to_index[c] for c in self.channels_ext],
+                    p=probs,
+                    replace=False,
                 )
 
                 if idx1 == conv_idx:
@@ -511,7 +527,7 @@ class MTA:
 
         return outcome_counts
 
-    def prob_convert(self, trans_mat, drop=None):
+    def prob_convert(self, trans_mat, drop=None) -> float:
 
         _d = self.data[
             self.data["path"].apply(lambda x: drop not in x)
@@ -533,7 +549,7 @@ class MTA:
         return p
 
     @show_time
-    def markov(self, sim=False, normalize=True):
+    def markov(self, sim: bool = False, normalize: bool = True) -> MTA:
 
         markov = defaultdict(float)
 
@@ -568,7 +584,7 @@ class MTA:
         return self
 
     @show_time
-    def shao(self, normalize=True):
+    def shao(self, normalize: bool = True) -> MTA:
 
         """
         probabilistic model by Shao and Li (supposed to be equivalent to Shapley); explanation in the original paper may seem rather unclear but
@@ -631,7 +647,7 @@ class MTA:
 
         return self
 
-    def get_generated_conversions(self, max_subset_size=3):
+    def get_generated_conversions(self, max_subset_size: float = 3) -> MTA:
 
         self.cc = defaultdict(lambda: defaultdict(float))
 
@@ -651,7 +667,7 @@ class MTA:
 
         return self
 
-    def v(self, coalition):
+    def v(self, coalition: Tuple[Any, Any]) -> float:
 
         """
         total number of conversions generated by all subsets of the coalition;
@@ -676,7 +692,7 @@ class MTA:
         )
 
     @show_time
-    def shapley(self, max_coalition_size=2, normalize=True):
+    def shapley(self, max_coalition_size: bool = 2, normalize: bool = True) -> MTA:
 
         """
         Shapley model; channels are players, the characteristic function maps a coalition A to the
@@ -706,8 +722,13 @@ class MTA:
 
     @show_time
     def logistic_regression(
-        self, test_size=0.25, ps=0.5, pc=0.5, normalize=True, n=2000
-    ):
+        self,
+        test_size: float = 0.25,
+        ps: float = 0.5,
+        pc: float = 0.5,
+        normalize: bool = True,
+        n: float = 2000,
+    ) -> MTA:
 
         """
         test_size is the proportion of data set to use as the test set
@@ -784,7 +805,7 @@ class MTA:
 
         return self
 
-    def show(self):
+    def show(self) -> None:
 
         """
         show simulation results
@@ -794,7 +815,7 @@ class MTA:
 
         print(res)
 
-    def rois(self, attrib, spend, cv):
+    def rois(self, attrib, spend, cv) -> DefaultDict[float]:
 
         """
         calculate ROIs as suggested in paper
