@@ -10,6 +10,7 @@ import copy
 import json
 import os
 import sys
+from collections.abc import Callable
 from typing import List, Any, Dict
 import arrow
 
@@ -18,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 
-def show_time(func):
+def show_time(func: Callable[[], Any]):
 
     """
     timer decorator
