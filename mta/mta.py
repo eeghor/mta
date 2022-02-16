@@ -211,16 +211,16 @@ class MTA:
 
         return self
 
-    def normalize_dict(self, d: Dict = None, decimal_digits: float = 6) -> Dict:
+    def normalize_dict(self, dic: Dict[] = None, decimal_digits: float = 6) -> Dict:
         """
         returns a value-normalized version of dictionary d
         """
-        sum_all_values = sum(d.values())
 
-        for _ in d:
-            d[_] = round(d[_] / sum_all_values, decimal_digits)
+        if sum_all_values := sum(d.values()):
+        	for _ in dic:
+            	dic[_] = round(dic[_] / sum_all_values, decimal_digits)
 
-        return d
+        return dic
 
     @show_time
     def linear(self, share: str = "same", normalize: bool = True) -> MTA:
@@ -929,7 +929,7 @@ class MTA:
         return (beta, omega, sum(df))
 
     @show_time
-    def additive_hazard(self, epochs=20, normalize=True):
+    def additive_hazard(self, epochs: float=20, normalize: bool=True):
 
         """
         additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
