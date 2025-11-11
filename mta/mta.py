@@ -403,6 +403,15 @@ class MTA:
 
         return pair_counts
 
+    def ordered_tuple(self, t: Tuple[Any, ...]) -> Tuple[Any, ...]:
+        """
+        Return tuple t ordered
+        Special case: if tuple starts with START, keep it first and sort the rest
+        """
+        if len(t) > 1 and t[0] == self.START:
+            return (t[0],) + tuple(sorted(t[1:]))
+        return tuple(sorted(t))
+
     def transition_matrix(self) -> Dict[Tuple[str, str], float]:
         """Calculate Markov transition probabilities"""
         pair_counts = self.count_pairs()
