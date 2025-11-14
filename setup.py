@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="mta",
-    version="0.0.8",
+    version="0.0.9",  # Increment version number
     description="Multi-Touch Attribution Models for Marketing Analytics",
     long_description=long_description,
     long_description_content_type="text/markdown",

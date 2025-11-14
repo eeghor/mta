@@ -753,20 +753,22 @@ class MTA:
             channels: Specific channels to show (None for all)
 
         Returns:
-            DataFrame with attribution results
+            DataFrame with attribution results as percentages
         """
         df = pd.DataFrame.from_dict(self.attribution)
 
         if channels:
             df = df.loc[df.index.isin(channels)]
 
+        # Convert to percentages with 2 decimal places
+        df = df * 100
+        df = df.round(2)
+
         # Sort by index (channel name)
         df = df.sort_index()
 
-        print("\nAttribution Results:")
-        print("=" * 80)
+        print("\nAttribution Results (%):")
         print(df.to_string())
-        print("=" * 80)
 
         return df
 
@@ -775,20 +777,27 @@ class MTA:
         df = self.show()
 
         # Add summary statistics
-        print("\nModel Statistics:")
-        print(df.describe())
+        print("\nModel Statistics (%):")
+        print(df.describe().round(2))
 
         return df
 
-    def export_results(self, filepath: str, format: str = "csv") -> None:
+    def export_results(
+        self, filepath: str, format: str = "csv", as_percentage: bool = True
+    ) -> None:
         """
         Export attribution results
 
         Args:
             filepath: Output file path
             format: 'csv', 'json', or 'excel'
+            as_percentage: If True, export as percentages; if False, as decimals
         """
         df = pd.DataFrame.from_dict(self.attribution)
+
+        if as_percentage:
+            df = df * 100
+            df = df.round(2)
 
         if format == "csv":
             df.to_csv(filepath)
