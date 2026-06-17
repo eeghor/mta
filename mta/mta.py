@@ -106,7 +106,11 @@ class MTA:
     def _load_data(self, data: Union[str, pd.DataFrame]) -> None:
         """Load data from file or DataFrame"""
         if isinstance(data, str):
-            data_path = os.path.join(os.path.dirname(__file__), "data", data)
+            data_path = (
+                data
+                if os.path.isabs(data) or os.path.exists(data)
+                else os.path.join(os.path.dirname(__file__), "data", data)
+            )
             self.data = pd.read_csv(data_path)
         elif isinstance(data, pd.DataFrame):
             self.data = data.copy()
