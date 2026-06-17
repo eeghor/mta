@@ -126,11 +126,15 @@ class MTA:
                 f"Found: {set(self.data.columns)}"
             )
 
+    def _split_values(self, value: Any) -> List[str]:
+        """Split path-like values using the configured separator."""
+        return [ch.strip() for ch in str(value).split(self.config.sep.strip())]
+
     def _prepare_data(self) -> None:
         """Convert path and exposure_times to lists"""
         self.data[["path", "exposure_times"]] = self.data[
             ["path", "exposure_times"]
-        ].map(lambda x: [ch.strip() for ch in str(x).split(self.config.sep.strip())])
+        ].map(self._split_values)
 
     def _setup_channels(self) -> None:
         """Setup channel mappings and indices"""
@@ -157,7 +161,7 @@ class MTA:
 
         if exposure_every_second:
             for path_str in self.data["path"]:
-                path_list = [ch.strip() for ch in path_str.split(">")]
+                path_list = self._split_values(path_str)
                 time_range = arrow.Arrow.range(
                     "second", _t0, _t0.shift(seconds=len(path_list) - 1)
                 )
@@ -176,8 +180,8 @@ class MTA:
         cleaned_data = []
 
         for _, row in self.data.iterrows():
-            path = [ch.strip() for ch in str(row["path"]).split(">")]
-            exposure = [ch.strip() for ch in str(row["exposure_times"]).split(">")]
+            path = self._split_values(row["path"])
+            exposure = self._split_values(row["exposure_times"])
 
             clean_path, clean_exposure = [], []
             prev_channel = None
