@@ -131,10 +131,12 @@ class MTA:
         return [ch.strip() for ch in str(value).split(self.config.sep.strip())]
 
     def _prepare_data(self) -> None:
-        """Convert path and exposure_times to lists"""
-        self.data[["path", "exposure_times"]] = self.data[
-            ["path", "exposure_times"]
-        ].map(self._split_values)
+        """Convert path-like columns to lists."""
+        self.data["path"] = self.data["path"].map(self._split_values)
+        if "exposure_times" in self.data.columns:
+            self.data["exposure_times"] = self.data["exposure_times"].map(
+                self._split_values
+            )
 
     def _setup_channels(self) -> None:
         """Setup channel mappings and indices"""
@@ -178,31 +180,37 @@ class MTA:
     def remove_loops(self) -> "MTA":
         """Remove consecutive duplicate channels"""
         cleaned_data = []
+        has_exposure_times = "exposure_times" in self.data.columns
 
         for _, row in self.data.iterrows():
             path = self._split_values(row["path"])
-            exposure = self._split_values(row["exposure_times"])
+            exposure = (
+                self._split_values(row["exposure_times"])
+                if has_exposure_times
+                else None
+            )
 
             clean_path, clean_exposure = [], []
             prev_channel = None
 
-            for ch, exp in zip(path, exposure):
+            for index, ch in enumerate(path):
                 if ch != prev_channel:
                     clean_path.append(ch)
-                    clean_exposure.append(exp)
+                    if exposure is not None:
+                        clean_exposure.append(exposure[index])
                     prev_channel = ch
 
-            cleaned_data.append(
-                {
-                    "path": self.config.sep.join(clean_path),
-                    "exposure_times": self.config.sep.join(clean_exposure),
-                    **{
-                        col: row[col]
-                        for col in self.data.columns
-                        if col not in ["path", "exposure_times"]
-                    },
-                }
-            )
+            cleaned_row = {
+                "path": self.config.sep.join(clean_path),
+                **{
+                    col: row[col]
+                    for col in self.data.columns
+                    if col not in ["path", "exposure_times"]
+                },
+            }
+            if exposure is not None:
+                cleaned_row["exposure_times"] = self.config.sep.join(clean_exposure)
+            cleaned_data.append(cleaned_row)
 
         self.data = pd.DataFrame(cleaned_data)
 
@@ -212,7 +220,8 @@ class MTA:
             for col in self.data.columns
             if col not in ["path", "exposure_times"]
         }
-        agg_dict["exposure_times"] = "first"
+        if has_exposure_times:
+            agg_dict["exposure_times"] = "first"
 
         self.data = self.data.groupby("path", as_index=False).agg(agg_dict)
         return self
@@ -230,13 +239,15 @@ class MTA:
         )
 
     def _apply_normalization(
-        self, result: Dict[str, float], normalize: bool
+        self, result: Dict[str, float], normalize: Optional[bool]
     ) -> Dict[str, float]:
         """Apply normalization if requested"""
+        if normalize is None:
+            normalize = self.config.normalize_by_default
         return self.normalize_dict(result) if normalize else result
 
     @show_time
-    def linear(self, share: str = "same", normalize: bool = True) -> "MTA":
+    def linear(self, share: str = "same", normalize: Optional[bool] = None) -> "MTA":
         """
         Linear attribution model
 
@@ -270,7 +281,10 @@ class MTA:
 
     @show_time
     def position_based(
-        self, first_weight: float = 40, last_weight: float = 40, normalize: bool = True
+        self,
+        first_weight: float = 40,
+        last_weight: float = 40,
+        normalize: Optional[bool] = None,
     ) -> "MTA":
         """
         Position-based attribution
@@ -320,7 +334,7 @@ class MTA:
 
     @show_time
     def time_decay(
-        self, count_direction: str = "left", normalize: bool = True
+        self, count_direction: str = "left", normalize: Optional[bool] = None
     ) -> "MTA":
         """
         Time decay attribution - channels closer to conversion get more credit
@@ -362,7 +376,7 @@ class MTA:
         return self
 
     @show_time
-    def first_touch(self, normalize: bool = True) -> "MTA":
+    def first_touch(self, normalize: Optional[bool] = None) -> "MTA":
         """First-touch attribution model"""
         first_touch = (
             self.data[self.data["total_conversions"] > 0]
@@ -376,7 +390,7 @@ class MTA:
         return self
 
     @show_time
-    def last_touch(self, normalize: bool = True) -> "MTA":
+    def last_touch(self, normalize: Optional[bool] = None) -> "MTA":
         """Last-touch attribution model"""
         last_touch = (
             self.data[self.data["total_conversions"] > 0]
@@ -508,7 +522,9 @@ class MTA:
         return total_prob
 
     @show_time
-    def markov(self, sim: bool = False, normalize: bool = True) -> "MTA":
+    def markov(
+        self, sim: bool = False, normalize: Optional[bool] = None
+    ) -> "MTA":
         """
         Markov chain attribution model
 
@@ -541,7 +557,7 @@ class MTA:
         return self
 
     @show_time
-    def shao(self, normalize: bool = True) -> "MTA":
+    def shao(self, normalize: Optional[bool] = None) -> "MTA":
         """
         probabilistic model by Shao and Li (supposed to be equivalent to Shapley); explanation in the original paper may seem rather unclear but
         this https://stats.stackexchange.com/questions/255312/multi-channel-attribution-modelling-using-a-simple-probabilistic-model
@@ -596,8 +612,7 @@ class MTA:
 
                     self.C[ch_i] += row.total_conversions * pc
 
-        if normalize:
-            self.C = self.normalize_dict(self.C)
+        self.C = self._apply_normalization(dict(self.C), normalize)
 
         self.attribution["shao"] = self.C
 
@@ -654,7 +669,9 @@ class MTA:
 
     @show_time
     def shapley(
-        self, max_coalition_size: Optional[int] = None, normalize: bool = True
+        self,
+        max_coalition_size: Optional[int] = None,
+        normalize: Optional[bool] = None,
     ) -> "MTA":
         """
         Shapley value attribution
@@ -699,7 +716,7 @@ class MTA:
         test_size: float = 0.25,
         sample_rows: float = 0.5,
         sample_features: float = 0.5,
-        normalize: bool = True,
+        normalize: Optional[bool] = None,
         n_iterations: int = 2000,
     ) -> "MTA":
         """
@@ -928,11 +945,16 @@ class MTA:
 
     @show_time
     def additive_hazard(
-        self, epochs: int = 20, normalize: bool = True
+        self, epochs: int = 20, normalize: Optional[bool] = None
     ) -> "MTA":  # FIXED
         """
         additive hazard model as in Multi-Touch Attribution in On-line Advertising with Survival Theory
         """
+        if "exposure_times" not in self.data.columns:
+            raise ValueError(
+                "additive_hazard requires exposure_times; provide the column or "
+                "initialize MTA with add_timepoints=True"
+            )
 
         beta = {c: random.uniform(0.001, 1) for c in self.channels}
         omega = {c: random.uniform(0.001, 1) for c in self.channels}
@@ -959,8 +981,7 @@ class MTA:
                 # FIXED: Weight by actual conversions
                 additive_hazard[c] += p[c] * row.total_conversions
 
-        if normalize:
-            additive_hazard = self.normalize_dict(additive_hazard)
+        additive_hazard = self._apply_normalization(dict(additive_hazard), normalize)
 
         self.attribution["add_haz"] = additive_hazard
 
