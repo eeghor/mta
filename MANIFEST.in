@@ -2,4 +2,3 @@ include README.md
 include LICENSE
 include requirements.txt
 recursive-include mta/data *.csv.gz
-recursive-include mta *.py

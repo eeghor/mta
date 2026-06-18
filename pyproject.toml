@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mta"
-version = "0.0.8"
+version = "0.0.9"
 description = "Multi-Touch Attribution Models for Marketing Analytics"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Igor Korostil", email = "eeghor@gmail.com"}
 ]
@@ -17,14 +17,14 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-
 dependencies = [
     "pandas>=1.3.0",
     "numpy>=1.20.0",
@@ -40,7 +40,16 @@ test = [
 
 [project.urls]
 Homepage = "https://github.com/eeghor/mta"
+Repository = "https://github.com/eeghor/mta"
 Issues = "https://github.com/eeghor/mta/issues"
+"Bug Reports" = "https://github.com/eeghor/mta/issues"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["mta"]
+
+[tool.setuptools.package-data]
+mta = ["data/*.csv.gz", "py.typed"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers --strict-config -ra"
