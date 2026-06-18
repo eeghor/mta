@@ -127,8 +127,14 @@ class MTA:
             )
 
     def _split_values(self, value: Any) -> List[str]:
-        """Split path-like values using the configured separator."""
-        return [ch.strip() for ch in str(value).split(self.config.sep.strip())]
+        """Split path-like values using the configured separator.
+
+        Empty segments (from repeated separators or blank input) are dropped.
+        """
+        if value is None or (isinstance(value, (float, type(None))) and pd.isna(value)):
+            return []
+        parts = [ch.strip() for ch in str(value).split(self.config.sep.strip())]
+        return [p for p in parts if p]
 
     def _prepare_data(self) -> None:
         """Convert path-like columns to lists."""
@@ -140,7 +146,7 @@ class MTA:
 
     def _setup_channels(self) -> None:
         """Setup channel mappings and indices"""
-        self.channels = sorted({ch for ch in chain.from_iterable(self.data["path"])})
+        self.channels = sorted({ch for ch in chain.from_iterable(self.data["path"]) if ch})
         self.channels_ext = [self.START] + self.channels + [self.CONV, self.NULL]
         self.channel_name_to_index = {c: i for i, c in enumerate(self.channels_ext)}
         self.index_to_channel_name = {
@@ -154,24 +160,35 @@ class MTA:
         )
 
     def add_exposure_times(self, exposure_every_second: bool = True) -> "MTA":
-        """Generate synthetic exposure times"""
+        """Generate synthetic exposure times.
+
+        If exposure_every_second=False the column is not generated (no-op).
+        This avoids a length-mismatch crash for the unimplemented False branch.
+        """
         if "exposure_times" in self.data.columns:
+            return self
+
+        if not exposure_every_second:
+            # Explicit False: do not synthesize (caller can provide their own column).
             return self
 
         ts = []
         _t0 = arrow.utcnow()
 
-        if exposure_every_second:
-            for path_str in self.data["path"]:
-                path_list = self._split_values(path_str)
-                time_range = arrow.Arrow.range(
-                    "second", _t0, _t0.shift(seconds=len(path_list) - 1)
+        for path_str in self.data["path"]:
+            path_list = self._split_values(path_str)
+            n = len(path_list)
+            if n <= 0:
+                ts.append("")
+                continue
+            time_range = arrow.Arrow.range(
+                "second", _t0, _t0.shift(seconds=n - 1)
+            )
+            ts.append(
+                self.config.sep.join(
+                    [t.format("YYYY-MM-DD HH:mm:ss") for t in time_range]
                 )
-                ts.append(
-                    self.config.sep.join(
-                        [t.format("YYYY-MM-DD HH:mm:ss") for t in time_range]
-                    )
-                )
+            )
 
         self.data["exposure_times"] = ts
         return self
@@ -261,17 +278,21 @@ class MTA:
         linear = defaultdict(float)
 
         for row in self.data.itertuples():
-            if not row.total_conversions:
+            if not row.total_conversions or not row.path:
                 continue
 
             if share == "same":
                 unique_channels = set(row.path)
+                if not unique_channels:
+                    continue
                 credit_per_channel = row.total_conversions / len(unique_channels)
                 for c in unique_channels:
                     linear[c] += credit_per_channel
             else:  # proportional
                 channel_counts = Counter(row.path)
                 total_touches = sum(channel_counts.values())
+                if total_touches == 0:
+                    continue
                 for c, count in channel_counts.items():
                     linear[c] += row.total_conversions * (count / total_touches)
 
@@ -300,7 +321,7 @@ class MTA:
         position_based = defaultdict(float)
 
         for row in self.data.itertuples():
-            if not row.total_conversions:
+            if not row.total_conversions or not row.path:
                 continue
 
             path_len = len(row.path)
@@ -308,9 +329,16 @@ class MTA:
             if path_len == 1:
                 position_based[row.path[0]] += row.total_conversions
             elif path_len == 2:
-                credit = row.total_conversions / 2
-                position_based[row.path[0]] += credit
-                position_based[row.path[-1]] += credit
+                # Respect first/last weights. Renormalize the declared end weights
+                # to sum to 100% so total credit is conserved for 2-touch journeys
+                # (preserves default 40+40 behavior of 50/50 while allowing e.g.
+                # first=30,last=70 to allocate 30%/70%).
+                total_w = first_weight + last_weight
+                if total_w > 0:
+                    f_share = (first_weight / total_w) * row.total_conversions
+                    l_share = (last_weight / total_w) * row.total_conversions
+                    position_based[row.path[0]] += f_share
+                    position_based[row.path[-1]] += l_share
             else:
                 position_based[row.path[0]] += (
                     first_weight * row.total_conversions / 100
@@ -349,7 +377,7 @@ class MTA:
         time_decay = defaultdict(float)
 
         for row in self.data.itertuples():
-            if not row.total_conversions:
+            if not row.total_conversions or not row.path:
                 continue
 
             # Get unique channels in order of appearance
@@ -365,6 +393,9 @@ class MTA:
             if count_direction == "right":
                 seen.reverse()
 
+            if not seen:
+                continue
+
             # Assign weights: 1, 2, 3, ... (linear growth)
             total_weight = sum(range(1, len(seen) + 1))
 
@@ -378,12 +409,13 @@ class MTA:
     @show_time
     def first_touch(self, normalize: Optional[bool] = None) -> "MTA":
         """First-touch attribution model"""
-        first_touch = (
-            self.data[self.data["total_conversions"] > 0]
-            .groupby(self.data["path"].apply(lambda x: x[0]))["total_conversions"]
-            .sum()
-            .to_dict()
-        )
+        mask = self.data["total_conversions"] > 0
+        conv = self.data.loc[mask & self.data["path"].apply(bool)]
+        if len(conv) == 0:
+            first_touch = {}
+        else:
+            first_keys = conv["path"].apply(lambda x: x[0])
+            first_touch = conv.groupby(first_keys)["total_conversions"].sum().to_dict()
 
         first_touch = self._apply_normalization(first_touch, normalize)
         self.attribution["first_touch"] = first_touch
@@ -392,12 +424,13 @@ class MTA:
     @show_time
     def last_touch(self, normalize: Optional[bool] = None) -> "MTA":
         """Last-touch attribution model"""
-        last_touch = (
-            self.data[self.data["total_conversions"] > 0]
-            .groupby(self.data["path"].apply(lambda x: x[-1]))["total_conversions"]
-            .sum()
-            .to_dict()
-        )
+        mask = self.data["total_conversions"] > 0
+        conv = self.data.loc[mask & self.data["path"].apply(bool)]
+        if len(conv) == 0:
+            last_touch = {}
+        else:
+            last_keys = conv["path"].apply(lambda x: x[-1])
+            last_touch = conv.groupby(last_keys)["total_conversions"].sum().to_dict()
 
         last_touch = self._apply_normalization(last_touch, normalize)
         self.attribution["last_touch"] = last_touch
@@ -415,13 +448,16 @@ class MTA:
         pair_counts = defaultdict(int)
 
         for row in self.data.itertuples():
+            path = row.path
+            if not path:
+                continue
             # Count transitions along the path
-            for pair in self.pairs([self.START] + row.path):
+            for pair in self.pairs([self.START] + path):
                 pair_counts[pair] += row.total_conversions + row.total_null
 
             # Add terminal transitions
-            pair_counts[(row.path[-1], self.NULL)] += row.total_null
-            pair_counts[(row.path[-1], self.CONV)] += row.total_conversions
+            pair_counts[(path[-1], self.NULL)] += row.total_null
+            pair_counts[(path[-1], self.CONV)] += row.total_conversions
 
         return pair_counts
 
@@ -569,6 +605,8 @@ class MTA:
         # count user conversions and nulls for each visited channel and channel pair
 
         for row in self.data.itertuples():
+            if not row.path:
+                continue
 
             for n in range(1, 3):
 
@@ -589,6 +627,8 @@ class MTA:
         self.C = defaultdict(float)
 
         for row in self.data.itertuples():
+            if not row.path:
+                continue
 
             for ch_i in set(row.path):
 
@@ -628,6 +668,8 @@ class MTA:
         for ch_list, convs, nulls in zip(
             self.data["path"], self.data["total_conversions"], self.data["total_null"]
         ):
+            if not ch_list:
+                continue
             channels = self.ordered_tuple(tuple(set(ch_list)))
 
             if max_subset_size is not None and len(channels) > max_subset_size:
@@ -732,6 +774,8 @@ class MTA:
         # Build feature matrix
         records = []
         for row in self.data.itertuples():
+            if not row.path:
+                continue
             channel_set = {c: 1 for c in row.path}
 
             for _ in range(row.total_conversions):
@@ -785,27 +829,48 @@ class MTA:
 
     def show(self, channels: Optional[List[str]] = None) -> pd.DataFrame:
         """
-        Display attribution results
+        Display attribution results.
+
+        Automatically detects whether stored values are normalized (0-1 range)
+        and displays as percentages in that case. Otherwise shows raw values.
 
         Args:
             channels: Specific channels to show (None for all)
 
         Returns:
-            DataFrame with attribution results as percentages
+            DataFrame with attribution results (percentages or raw)
         """
         df = pd.DataFrame.from_dict(self.attribution)
-
+        # Reindex to ensure every channel from the dataset appears (missing -> 0).
+        # This eliminates NaNs in show/compare/export when some models only credit
+        # a subset of channels (e.g. first_touch vs markov).
+        if self.channels:
+            df = df.reindex(self.channels)
+        df = df.fillna(0)
         if channels:
             df = df.loc[df.index.isin(channels)]
 
-        # Convert to percentages with 2 decimal places
-        df = df * 100
-        df = df.round(2)
+        # Auto-detect scaling: if values look like normalized fractions (max <= ~1),
+        # display as percentages for convenience (preserves prior behavior when
+        # normalize=True). Otherwise show the raw stored values.
+        do_percent = False
+        if not df.empty:
+            try:
+                max_val = float(df.to_numpy().max())
+                do_percent = max_val <= 1.000001
+            except Exception:
+                do_percent = False
+
+        if do_percent:
+            df = (df * 100).round(2)
+            header = "Attribution Results (%)"
+        else:
+            header = "Attribution Results"
 
         # Sort by index (channel name)
         df = df.sort_index()
 
-        print("\nAttribution Results (%):")
+        print(f"\n{header}:")
         print(df.to_string())
 
         return df
@@ -814,8 +879,8 @@ class MTA:
         """Compare all attribution models side by side"""
         df = self.show()
 
-        # Add summary statistics
-        print("\nModel Statistics (%):")
+        # Add summary statistics (scale depends on what show() decided to display)
+        print("\nModel Statistics:")
         print(df.describe().round(2))
 
         return df
@@ -832,6 +897,9 @@ class MTA:
             as_percentage: If True, export as percentages; if False, as decimals
         """
         df = pd.DataFrame.from_dict(self.attribution)
+        if self.channels:
+            df = df.reindex(self.channels)
+        df = df.fillna(0)
 
         if as_percentage:
             df = df * 100
