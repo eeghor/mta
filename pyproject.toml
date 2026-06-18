@@ -32,6 +32,16 @@ dependencies = [
     "arrow>=1.0.0",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4,<10",
+    "pytest-cov>=4.1,<8",
+]
+
 [project.urls]
 Homepage = "https://github.com/eeghor/mta"
 Issues = "https://github.com/eeghor/mta/issues"
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config -ra"
+testpaths = ["tests"]

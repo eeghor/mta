@@ -282,6 +282,21 @@ This library implements models and techniques from the following research papers
 - **Logistic Regression**: Dalessandro et al. (2012), Ren et al. (2018)
 - **Additive Hazard**: Zhang et al. (2014)
 
+## Testing
+
+Install the package with its test dependencies and run the suite:
+
+```bash
+python -m pip install -e ".[test]"
+python -m pytest
+```
+
+To include a line-level coverage report:
+
+```bash
+python -m pytest --cov=mta --cov-report=term-missing
+```
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
