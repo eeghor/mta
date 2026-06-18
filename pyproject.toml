@@ -44,9 +44,9 @@ Repository = "https://github.com/eeghor/mta"
 Issues = "https://github.com/eeghor/mta/issues"
 "Bug Reports" = "https://github.com/eeghor/mta/issues"
 
-[tool.setuptools]
-include-package-data = true
-packages = ["mta"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mta"]
 
 [tool.setuptools.package-data]
 mta = ["data/*.csv.gz", "py.typed"]
