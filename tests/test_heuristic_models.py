@@ -67,6 +67,30 @@ def test_time_decay_favors_later_unique_touches(raw_mta):
     assert_credit_is_conserved(result)
 
 
+def test_time_decay_count_direction_reverses_the_weighting(raw_mta):
+    """'right' must mirror 'left', not collapse onto the same result.
+
+    Regression test: deduplicating before reversing (instead of after) made
+    count_direction a no-op, so both directions returned identical numbers.
+    """
+    raw_mta.time_decay(count_direction="left", normalize=False)
+    left = dict(raw_mta.attribution["time_decay"])
+
+    raw_mta.time_decay(count_direction="right", normalize=False)
+    right = dict(raw_mta.attribution["time_decay"])
+
+    assert left != right
+
+    # 'left' grows toward conversion, so later touches outweigh earlier ones;
+    # 'right' grows away from it, so earlier touches outweigh later ones.
+    assert left["email"] > left["search"]
+    assert right["search"] > right["email"]
+
+    # Credit is conserved in both directions.
+    assert_credit_is_conserved(left)
+    assert_credit_is_conserved(right)
+
+
 @pytest.mark.parametrize(
     ("method", "kwargs", "message"),
     [

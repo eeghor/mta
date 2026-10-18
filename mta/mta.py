@@ -368,7 +368,10 @@ class MTA:
         Time decay attribution - channels closer to conversion get more credit
 
         Args:
-            count_direction: 'left' (oldest first) or 'right' (newest first)
+            count_direction: 'left' (oldest first, so weight grows toward
+                conversion and the last touch is weighted highest) or 'right'
+                (newest first, so weight grows away from conversion and the
+                first touch is weighted highest)
             normalize: Whether to normalize results
         """
         if count_direction not in ["left", "right"]:
@@ -380,27 +383,29 @@ class MTA:
             if not row.total_conversions or not row.path:
                 continue
 
-            # Get unique channels in order of appearance
+            # Get unique channels in order of first appearance along the path.
+            # Deduplicate in path order first: reversing before deduplication
+            # would yield the same sequence either way and make
+            # count_direction a no-op.
             seen = []
-            path_to_iterate = (
-                row.path if count_direction == "left" else reversed(row.path)
-            )
-
-            for c in path_to_iterate:
+            for c in row.path:
                 if c not in seen:
                     seen.append(c)
-
-            if count_direction == "right":
-                seen.reverse()
 
             if not seen:
                 continue
 
-            # Assign weights: 1, 2, 3, ... (linear growth)
-            total_weight = sum(range(1, len(seen) + 1))
+            # Assign weights: 1, 2, 3, ... (linear growth).
+            # 'left' grows toward conversion (last touch weighted highest);
+            # 'right' grows away from it (first touch weighted highest).
+            weights = list(range(1, len(seen) + 1))
+            if count_direction == "right":
+                weights.reverse()
 
-            for i, c in enumerate(seen, 1):
-                time_decay[c] += (i / total_weight) * row.total_conversions
+            total_weight = sum(weights)
+
+            for c, w in zip(seen, weights):
+                time_decay[c] += (w / total_weight) * row.total_conversions
 
         time_decay = self._apply_normalization(dict(time_decay), normalize)
         self.attribution["time_decay"] = time_decay
