@@ -278,7 +278,17 @@ class MTA:
                 cleaned_row["exposure_times"] = self.config.sep.join(clean_exposure)
             cleaned_data.append(cleaned_row)
 
-        self.data = pd.DataFrame(cleaned_data)
+        # Empty input is legitimate (every model returns empty attribution),
+        # so keep the column layout rather than building a frame with no
+        # columns, which would break the groupby below.
+        self.data = (
+            pd.DataFrame(cleaned_data)
+            if cleaned_data
+            else self.data.iloc[0:0].copy()
+        )
+
+        if self.data.empty:
+            return self
 
         # Aggregate duplicate paths
         agg_dict = {
@@ -847,16 +857,44 @@ class MTA:
 
         df = pd.DataFrame(records).fillna(0).sample(frac=1.0, random_state=42)
 
+        if df.empty:
+            raise ValueError(
+                "logistic_regression has no records to fit: every journey "
+                "produced zero conversions and zero nulls."
+            )
+
+        if df["conv"].nunique() < 2:
+            present = int(df["conv"].iloc[0])
+            raise ValueError(
+                "logistic_regression needs both converting and non-converting "
+                f"records, but only {'conversions' if present else 'nulls'} are "
+                "present. Attribution is impossible without both classes."
+            )
+
         # Ensemble learning
         coef_sum = defaultdict(float)
 
         for i in range(n_iterations):
-            # Balanced sampling
+            # Balanced sampling: take half of each class so the bootstrap stays
+            # class-balanced.
             df_conv = df[df["conv"] == 1].sample(frac=0.5, random_state=i)
             df_null = df[df["conv"] == 0].sample(frac=0.5, random_state=i)
-            df_sample = pd.concat([df_conv, df_null]).sample(
-                frac=sample_rows, random_state=i
+            balanced = pd.concat([df_conv, df_null])
+
+            # Subsample each class independently. Subsampling the pooled frame
+            # would drop rows at random and can discard an entire class on small
+            # datasets, which no classifier can fit.
+            df_sample = pd.concat(
+                [
+                    balanced[balanced["conv"] == cls].sample(
+                        frac=sample_rows, random_state=i
+                    )
+                    for cls in (0, 1)
+                ]
             )
+
+            if df_sample.empty:
+                continue
 
             # Feature sampling
             feature_cols = (
@@ -865,13 +903,32 @@ class MTA:
                 .columns
             )
 
+            # frac<1 can round down to zero columns on narrow datasets.
+            if len(feature_cols) == 0:
+                continue
+
             X = df_sample[feature_cols]
             y = df_sample["conv"]
 
-            # Train model
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=i, stratify=y
+            # Train model. The holdout is only used to satisfy a stratified
+            # split; X_test/y_test are never inspected, so on datasets too small
+            # to stratify we train on the whole sample instead of failing.
+            n_classes = y.nunique()
+            class_counts = y.value_counts()
+            min_class = int(class_counts.min()) if len(class_counts) else 0
+
+            can_stratify = (
+                n_classes >= 2
+                and min_class >= 2
+                and max(1, int(round(len(y) * test_size))) >= n_classes
             )
+
+            if can_stratify:
+                X_train, _, y_train, _ = train_test_split(
+                    X, y, test_size=test_size, random_state=i, stratify=y
+                )
+            else:
+                X_train, y_train = X, y
 
             clf = LogisticRegression(
                 random_state=i, solver="lbfgs", fit_intercept=False, max_iter=1000

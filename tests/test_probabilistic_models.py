@@ -202,3 +202,63 @@ def test_fractional_counts_remain_valid_for_other_models():
 
     assert model.attribution["first_touch"] == {"a": 2.5, "c": 1.5}
     assert model.attribution["last_touch"] == {"b": 2.5, "c": 1.5}
+
+
+def test_empty_dataset_is_accepted_and_yields_empty_attribution():
+    """Regression test: remove_loops crashed with KeyError('path').
+
+    Every model already returns empty attribution for empty input, so the
+    constructor must tolerate it and preserve the column layout.
+    """
+    data = pd.DataFrame(
+        {
+            "path": pd.Series([], dtype=object),
+            "total_conversions": pd.Series([], dtype=float),
+            "total_null": pd.Series([], dtype=float),
+        }
+    )
+
+    model = MTA(data, add_timepoints=False)
+
+    assert len(model.data) == 0
+    assert list(model.data.columns) == ["path", "total_conversions", "total_null"]
+
+    model.linear().first_touch().last_touch().position_based()
+    model.time_decay().shao().shapley().markov(sim=False)
+
+    assert all(v == {} for v in model.attribution.values())
+
+
+@pytest.mark.parametrize("n_per_class", [1, 2, 3, 4, 5, 6])
+def test_logistic_regression_survives_small_class_sizes(n_per_class):
+    """Regression test: sklearn split/solver errors on tiny datasets.
+
+    The pooled subsample could discard an entire class, and the stratified
+    split needed more members than a small bootstrap provides.
+    """
+    data = _lr_data([1] * n_per_class, [1] * n_per_class, n_rows=n_per_class)
+
+    model = MTA(data, config=MTAConfig(add_timepoints=False, allow_loops=True))
+    model.logistic_regression(n_iterations=3)
+
+    assert set(model.attribution["linreg"]) <= set(model.channels)
+
+
+def test_logistic_regression_reports_single_class_data():
+    data = _lr_data([2] * 6, [0] * 6)
+
+    model = MTA(data, config=MTAConfig(add_timepoints=False, allow_loops=True))
+
+    with pytest.raises(ValueError, match="needs both converting and non-converting"):
+        model.logistic_regression(n_iterations=2)
+
+
+def test_logistic_regression_reports_no_records():
+    data = pd.DataFrame(
+        {"path": ["a > b"], "total_conversions": [0], "total_null": [0]}
+    )
+
+    model = MTA(data, add_timepoints=False)
+
+    with pytest.raises(ValueError, match="no records to fit"):
+        model.logistic_regression(n_iterations=2)
