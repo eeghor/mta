@@ -1,3 +1,4 @@
+import math
 from unittest.mock import patch
 
 import pandas as pd
@@ -132,3 +133,72 @@ def test_additive_hazard_uses_time_order_and_normalizes():
         model.additive_hazard(epochs=0)
 
     assert sum(model.attribution["add_haz"].values()) == pytest.approx(1, abs=1e-5)
+
+
+def _lr_data(conversions, nulls, n_rows=None, channels=("a", "b")):
+    """Journeys with enough rows for a stratified bootstrap split."""
+    n_rows = n_rows or len(conversions)
+    # Vary the channel pair so remove_loops cannot merge rows into one.
+    paths = [f"{channels[i % len(channels)]} > tail{i}" for i in range(n_rows)]
+    return pd.DataFrame(
+        {
+            "path": paths,
+            "total_conversions": conversions,
+            "total_null": nulls,
+        }
+    )
+
+
+def test_logistic_regression_rejects_fractional_counts():
+    """Regression test: range() raised an opaque TypeError on float counts.
+
+    The model expands each journey into one record per conversion/null, so a
+    fractional count must be reported as a clear ValueError instead.
+    Distinct channels keep the rows separate so the fraction survives the
+    loop-removal aggregation step.
+    """
+    data = _lr_data([2.5] * 20, [1.5] * 20, channels=["a", "b", "c"])
+    model = MTA(data, config=MTAConfig(add_timepoints=False, allow_loops=True))
+
+    with pytest.raises(ValueError, match="whole-number counts"):
+        model.logistic_regression(n_iterations=2)
+
+
+def test_logistic_regression_accepts_whole_number_floats():
+    """CSV columns read as float64 even when every value is integral."""
+    data = _lr_data([3.0] * 20, [2.0] * 20)
+    model = MTA(data, add_timepoints=False)
+
+    model.logistic_regression(n_iterations=2)
+
+    assert model.attribution["linreg"]
+    assert all(math.isfinite(v) for v in model.attribution["linreg"].values())
+
+
+def test_logistic_regression_tolerates_nan_counts():
+    data = _lr_data([3.0] * 19 + [None], [2.0] * 20)
+    model = MTA(data, add_timepoints=False)
+
+    model.logistic_regression(n_iterations=2)
+
+    assert model.attribution["linreg"]
+    assert all(math.isfinite(v) for v in model.attribution["linreg"].values())
+
+
+def test_fractional_counts_remain_valid_for_other_models():
+    """Validation is scoped to logistic_regression; aggregation models cope."""
+    data = pd.DataFrame(
+        {
+            "path": ["a > b", "c"],
+            "total_conversions": [2.5, 1.5],
+            "total_null": [1.5, 0.5],
+        }
+    )
+    model = MTA(
+        data, config=MTAConfig(add_timepoints=False, normalize_by_default=False)
+    )
+
+    model.first_touch(normalize=False).last_touch(normalize=False)
+
+    assert model.attribution["first_touch"] == {"a": 2.5, "c": 1.5}
+    assert model.attribution["last_touch"] == {"b": 2.5, "c": 1.5}

@@ -150,6 +150,31 @@ class MTA:
                     f"Each path element requires exactly one timestamp."
                 )
 
+    def _validate_whole_number_counts(self) -> None:
+        """Ensure conversion/null counts are whole numbers for logistic_regression.
+
+        The model replicates each journey once per conversion/null, so it needs
+        integer counts. ``range()`` would otherwise raise an opaque TypeError.
+        Whole-number floats (a very common CSV artefact, e.g. 2.0) are accepted
+        and used as-is; only genuinely fractional values are rejected.
+        """
+        for col in ("total_conversions", "total_null"):
+            if col not in self.data.columns:
+                continue
+
+            for row_idx, value in enumerate(self.data[col]):
+                # NaN counts contribute nothing; handled by the falsy guard below.
+                if pd.isna(value):
+                    continue
+
+                if float(value) != int(value):
+                    raise ValueError(
+                        f"logistic_regression requires whole-number counts, but "
+                        f"column '{col}' has fractional value {value} at row "
+                        f"{row_idx}. Round or aggregate it before calling this "
+                        f"model."
+                    )
+
     def _split_values(self, value: Any) -> List[str]:
         """Split path-like values using the configured separator.
 
@@ -793,6 +818,11 @@ class MTA:
         """
         Logistic regression attribution using ensemble approach
 
+        This model expands every journey into one training record per
+        conversion/null, so total_conversions and total_null must be whole
+        numbers. Fractional counts are accepted by the other models (which
+        aggregate them) but not by this one.
+
         Args:
             test_size: Proportion for test set
             sample_rows: Proportion of rows to sample each iteration
@@ -800,6 +830,8 @@ class MTA:
             normalize: Whether to normalize results
             n_iterations: Number of bootstrap iterations
         """
+        self._validate_whole_number_counts()
+
         # Build feature matrix
         records = []
         for row in self.data.itertuples():
@@ -807,10 +839,10 @@ class MTA:
                 continue
             channel_set = {c: 1 for c in row.path}
 
-            for _ in range(row.total_conversions):
+            for _ in range(int(row.total_conversions)):
                 records.append({**channel_set, "conv": 1})
 
-            for _ in range(row.total_null):
+            for _ in range(int(row.total_null)):
                 records.append({**channel_set, "conv": 0})
 
         df = pd.DataFrame(records).fillna(0).sample(frac=1.0, random_state=42)
