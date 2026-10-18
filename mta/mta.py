@@ -118,13 +118,37 @@ class MTA:
             raise TypeError("data must be a file path or pandas DataFrame")
 
     def _validate_data(self) -> None:
-        """Validate required columns exist"""
+        """Validate required columns exist and that per-row fields are aligned."""
         required_cols = {"path", "total_conversions", "total_null"}
         if not required_cols.issubset(self.data.columns):
             raise ValueError(
                 f"Data must contain columns: {required_cols}. "
                 f"Found: {set(self.data.columns)}"
             )
+
+        if "exposure_times" in self.data.columns:
+            self._validate_exposure_times()
+
+    def _validate_exposure_times(self) -> None:
+        """Ensure exposure_times has exactly one timestamp per path element.
+
+        ``remove_loops`` zips path positions against exposure timestamps, and
+        ``additive_hazard`` pops one timestamp per channel. A row whose counts
+        disagree would otherwise raise an opaque IndexError during
+        construction, or silently misalign timestamps with channels.
+        """
+        for row_idx, (path_value, times_value) in enumerate(
+            zip(self.data["path"], self.data["exposure_times"])
+        ):
+            n_path = len(self._split_values(path_value))
+            n_times = len(self._split_values(times_value))
+
+            if n_path != n_times:
+                raise ValueError(
+                    f"exposure_times has {n_times} timestamp(s) but path has "
+                    f"{n_path} element(s) (row {row_idx}, path={path_value!r}). "
+                    f"Each path element requires exactly one timestamp."
+                )
 
     def _split_values(self, value: Any) -> List[str]:
         """Split path-like values using the configured separator.
